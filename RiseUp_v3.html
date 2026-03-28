@@ -1,0 +1,1412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no"/>
+<title>Rise Up</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;display:flex;align-items:center;justify-content:center;height:100vh;overflow:hidden;touch-action:none}
+canvas{display:block}
+</style>
+</head>
+<body>
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+<script>
+'use strict';
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GLOBALS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const W=400,H=700;
+
+// ── 10 visual themes, one per "decade" of levels (1-10, 11-20 … 91-100)
+// Each theme controls bg colours, obstacle tints, star/cloud density, special fx
+const THEMES=[
+  // 0: Levels 1-10  — Daytime Sky
+  {name:'Daytime Sky',    sky1:0x87ceeb,sky2:0x4a9eda,starAlpha:0.0, cloudAlpha:0.35,cloudScale:3,
+   blockTint:0x5588cc,wallTint:0x3366aa,triTint:0xdd5522,barTint:0x4477bb,
+   fogColor:'#87ceeb',ambientLight:0xffffff,speedMult:1.0,densityAdd:0},
+
+  // 1: Levels 11-20 — Sunset
+  {name:'Sunset',         sky1:0xff7733,sky2:0xcc3344,starAlpha:0.1, cloudAlpha:0.25,cloudScale:2.5,
+   blockTint:0xcc5522,wallTint:0xaa3311,triTint:0xff9944,barTint:0xdd6633,
+   fogColor:'#ff7733',ambientLight:0xff9966,speedMult:1.1,densityAdd:0},
+
+  // 2: Levels 21-30 — Dusk
+  {name:'Dusk',           sky1:0x441166,sky2:0x220033,starAlpha:0.3, cloudAlpha:0.15,cloudScale:2.2,
+   blockTint:0x8833cc,wallTint:0x6622aa,triTint:0xcc44ff,barTint:0x9944dd,
+   fogColor:'#220033',ambientLight:0xaa66ff,speedMult:1.2,densityAdd:1},
+
+  // 3: Levels 31-40 — Night Sky
+  {name:'Night Sky',      sky1:0x060620,sky2:0x0a0a30,starAlpha:0.7, cloudAlpha:0.06,cloudScale:2,
+   blockTint:0x3344aa,wallTint:0x2233cc,triTint:0x4466ff,barTint:0x3355bb,
+   fogColor:'#06060f',ambientLight:0x4466ff,speedMult:1.3,densityAdd:1},
+
+  // 4: Levels 41-50 — Aurora
+  {name:'Aurora',         sky1:0x003322,sky2:0x001a11,starAlpha:0.5, cloudAlpha:0.12,cloudScale:3,
+   blockTint:0x00cc88,wallTint:0x009966,triTint:0x44ffaa,barTint:0x00bb77,
+   fogColor:'#001a11',ambientLight:0x44ffaa,speedMult:1.45,densityAdd:2},
+
+  // 5: Levels 51-60 — Deep Space
+  {name:'Deep Space',     sky1:0x020210,sky2:0x050518,starAlpha:0.9, cloudAlpha:0.03,cloudScale:1.5,
+   blockTint:0x6644aa,wallTint:0x4422cc,triTint:0xaa66ff,barTint:0x8855dd,
+   fogColor:'#020210',ambientLight:0x8866ff,speedMult:1.6,densityAdd:2},
+
+  // 6: Levels 61-70 — Nebula
+  {name:'Nebula',         sky1:0x1a0033,sky2:0x330011,starAlpha:0.8, cloudAlpha:0.2, cloudScale:4,
+   blockTint:0xff3388,wallTint:0xcc1155,triTint:0xff66aa,barTint:0xee4499,
+   fogColor:'#1a0033',ambientLight:0xff66bb,speedMult:1.75,densityAdd:3},
+
+  // 7: Levels 71-80 — Asteroid Belt
+  {name:'Asteroid Belt',  sky1:0x111100,sky2:0x222200,starAlpha:0.6, cloudAlpha:0.05,cloudScale:1.5,
+   blockTint:0xaa8833,wallTint:0x886622,triTint:0xddbb44,barTint:0xcc9933,
+   fogColor:'#111100',ambientLight:0xddbb44,speedMult:1.9,densityAdd:3},
+
+  // 8: Levels 81-90 — Solar Storm
+  {name:'Solar Storm',    sky1:0x330800,sky2:0x660f00,starAlpha:0.4, cloudAlpha:0.08,cloudScale:2,
+   blockTint:0xff4400,wallTint:0xcc2200,triTint:0xff8833,barTint:0xee5511,
+   fogColor:'#330800',ambientLight:0xff6622,speedMult:2.1,densityAdd:4},
+
+  // 9: Levels 91-100 — Event Horizon
+  {name:'Event Horizon',  sky1:0x000000,sky2:0x0a0005,starAlpha:1.0, cloudAlpha:0.0,cloudScale:1,
+   blockTint:0xffffff,wallTint:0xdddddd,triTint:0xff00ff,barTint:0xcc00cc,
+   fogColor:'#000000',ambientLight:0xff00ff,speedMult:2.4,densityAdd:5},
+];
+
+// ── Level definitions: each level has a target altitude and allowed patterns
+// Patterns unlock gradually — early levels are simple, later levels add complexity
+const MAX_LEVEL=100;
+function getLevelConfig(lvl){
+  // Target height grows: level 1=300m, level 100=5000m
+  const targetAlt = 300 + (lvl-1)*47;
+  const themeIdx  = Math.min(9, Math.floor((lvl-1)/10));
+  const theme     = THEMES[themeIdx];
+
+  // Patterns unlock at certain levels
+  const patterns=['fallingBlocks'];
+  if(lvl>=3)  patterns.push('theTunnel');
+  if(lvl>=6)  patterns.push('theWall');
+  if(lvl>=10) patterns.push('thePendulum');
+  if(lvl>=15) patterns.push('theShredder');
+  if(lvl>=20) patterns.push('spikeDrop');
+  if(lvl>=30) patterns.push('spikeRain');
+  if(lvl>=40) patterns.push('theGauntlet');
+  if(lvl>=55) patterns.push('crossfire');
+  if(lvl>=70) patterns.push('vortex');
+  if(lvl>=85) patterns.push('apocalypse');
+
+  // Base difficulty multiplier for this level
+  const diff = 1.0 + (lvl-1)*0.035 + theme.speedMult - 1.0;
+  const density = Math.min(8, 2+Math.floor((lvl-1)/12)) + theme.densityAdd;
+
+  return {lvl,targetAlt,theme,themeIdx,patterns,diff,density};
+}
+
+// ── Storage
+const Store={
+  _g(k,d=0){try{return JSON.parse(localStorage.getItem('ru3_'+k))??d}catch{return d}},
+  _s(k,v){try{localStorage.setItem('ru3_'+k,JSON.stringify(v))}catch{}},
+  getHighScore(){return this._g('hs',0)},
+  saveHighScore(s){if(s>this.getHighScore()){this._s('hs',s);return true}return false},
+  getMaxLevel(){return this._g('maxlvl',1)},
+  saveMaxLevel(l){if(l>this.getMaxLevel())this._s('maxlvl',l)},
+  getLevelStars(l){return this._g('stars_'+l,0)},           // 0-3 stars per level
+  saveLevelStars(l,s){if(s>this.getLevelStars(l))this._s('stars_'+l,s)},
+  getTotalCoins(){return this._g('coins',0)},
+  addCoins(n){this._s('coins',this.getTotalCoins()+n)},
+  getRuns(){return this._g('runs',0)},
+  incRuns(){this._s('runs',this.getRuns()+1)},
+};
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  TEXTURE BUILDER
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function buildTextures(scene){
+  const mk=(w,h)=>{const g=scene.make.graphics({add:false});g._w=w;g._h=h;return g};
+  const fin=(g,k)=>{g.generateTexture(k,g._w,g._h);g.destroy()};
+
+  // Balloon
+  {const g=mk(60,88),cx=30,cy=30,r=27;
+  g.fillStyle(0xff2244);g.fillCircle(cx,cy,r);
+  g.fillStyle(0xff5577);g.fillCircle(cx-7,cy-7,r*.5);
+  g.fillStyle(0xffffff,0.2);g.fillCircle(cx-11,cy-11,r*.3);
+  g.fillStyle(0xffffff,0.08);for(let i=0;i<3;i++)g.fillRect(cx-r+4+i*5,cy-r+5,3,r*1.3);
+  g.fillStyle(0xcc1133);g.fillEllipse(cx,cy+r+1,10,7);
+  g.lineStyle(1.5,0xffaacc,.9);g.beginPath();g.moveTo(cx,cy+r+4);g.lineTo(cx-4,cy+r+22);g.strokePath();
+  fin(g,'balloon')}
+
+  // Shield
+  {const g=mk(80,80),cx=40,cy=40,r=36;
+  g.fillStyle(0x4fffb0,0.07);g.fillCircle(cx,cy,r);
+  g.lineStyle(3,0x4fffb0,1);g.strokeCircle(cx,cy,r-2);
+  g.lineStyle(1.5,0x4fffb0,.45);g.strokeCircle(cx,cy,r-9);
+  g.lineStyle(1,0x4fffb0,.18);g.strokeCircle(cx,cy,r-17);
+  g.lineStyle(1,0x4fffb0,.28);g.beginPath();g.moveTo(cx,cy-r+7);g.lineTo(cx,cy+r-7);g.moveTo(cx-r+7,cy);g.lineTo(cx+r-7,cy);g.strokePath();
+  for(let a=0;a<360;a+=45){const rd=Phaser.Math.DegToRad(a);const x1=cx+Math.cos(rd)*(r-13),y1=cy+Math.sin(rd)*(r-13),x2=cx+Math.cos(rd)*(r-4),y2=cy+Math.sin(rd)*(r-4);g.lineStyle(2,0x4fffb0,.7);g.beginPath();g.moveTo(x1,y1);g.lineTo(x2,y2);g.strokePath()}
+  fin(g,'shield')}
+
+  // Obstacle types
+  const obs=[
+    ['block',     60,26, (g)=>{g.fillStyle(0x1e3050);g.fillRect(0,0,60,26);g.lineStyle(2,0x4477aa);g.strokeRect(1,1,58,24);g.fillStyle(0x4477aa);[10,30,50].forEach(x=>g.fillCircle(x,13,3));g.lineStyle(1,0,0.4);g.beginPath();g.moveTo(0,13);g.lineTo(60,13);g.strokePath()}],
+    ['block_wide',50,26, (g)=>{g.fillStyle(0x1e3050);g.fillRect(0,0,50,26);g.lineStyle(2,0x4477aa);g.strokeRect(1,1,48,24);g.fillStyle(0x4477aa);[10,25,40].forEach(x=>g.fillCircle(x,13,3))}],
+    ['wall',      44,130,(g)=>{g.fillStyle(0x2a3f66);g.fillRect(0,0,44,130);g.lineStyle(2,0x4a6fa0);g.strokeRect(1,1,42,128);g.lineStyle(1,0x4a6fa0,.3);for(let y=20;y<130;y+=20){g.beginPath();g.moveTo(0,y);g.lineTo(44,y);g.strokePath()}g.fillStyle(0x4a6fa0,.8);[[8,10],[36,10],[8,120],[36,120]].forEach(([x,y])=>g.fillCircle(x,y,4))}],
+    ['triangle',  64,64, (g)=>{g.fillStyle(0x8b2fc9);g.fillTriangle(32,2,62,62,2,62);g.lineStyle(2,0xcc66ff);g.strokeTriangle(32,2,62,62,2,62);g.lineStyle(1,0xcc66ff,.4);g.strokeTriangle(32,14,52,54,12,54)}],
+    ['bar',       140,20,(g)=>{g.fillStyle(0x3a5580);g.fillRect(0,0,140,20);g.lineStyle(2,0x6699cc);g.strokeRect(1,1,138,18);[8,70,132].forEach(x=>{g.fillStyle(0x6699cc);g.fillCircle(x,10,4)})}],
+    ['spike',     16,34, (g)=>{g.fillStyle(0xcc3300);g.fillTriangle(8,0,16,34,0,34);g.lineStyle(1,0xff6633);g.strokeTriangle(8,0,16,34,0,34)}],
+    ['bomb',      30,30, (g)=>{g.fillStyle(0x222222);g.fillCircle(15,16,14);g.lineStyle(2,0x444444);g.strokeCircle(15,16,14);g.lineStyle(2,0xffaa00);g.beginPath();g.moveTo(15,2);g.lineTo(20,-4);g.strokePath();g.fillStyle(0xffdd44);g.fillCircle(20,-4,4)}],
+  ];
+  obs.forEach(([k,w,h,fn])=>{const g=mk(w,h);fn(g);fin(g,k)});
+
+  // Powerups
+  {const g=mk(32,32),cx=16,cy=16;
+  g.fillStyle(0xffaa00,.2);g.fillCircle(cx,cy,15);g.lineStyle(2,0xffaa00);g.strokeCircle(cx,cy,14);
+  g.fillStyle(0xffaa00);[[cx,cy-9,cx+3,cy-2,cx-3,cy-2],[cx,cy+9,cx+3,cy+2,cx-3,cy+2],[cx-9,cy,cx-2,cy-3,cx-2,cy+3],[cx+9,cy,cx+2,cy-3,cx+2,cy+3]].forEach(p=>g.fillTriangle(...p));
+  fin(g,'pu_shield')}
+  {const g=mk(32,32),cx=16,cy=16;
+  g.fillStyle(0x44aaff,.2);g.fillCircle(cx,cy,15);g.lineStyle(2,0x44aaff);g.strokeCircle(cx,cy,14);
+  g.lineStyle(2,0x44aaff);g.beginPath();g.moveTo(cx,cy);g.lineTo(cx,cy-8);g.strokePath();g.beginPath();g.moveTo(cx,cy);g.lineTo(cx+6,cy+3);g.strokePath();g.fillStyle(0x44aaff);g.fillCircle(cx,cy,2);
+  fin(g,'pu_slow')}
+  {const g=mk(32,32),cx=16,cy=16;
+  g.fillStyle(0xff66ff,.2);g.fillCircle(cx,cy,15);g.lineStyle(2,0xff66ff);g.strokeCircle(cx,cy,14);
+  g.fillStyle(0xff66ff);g.fillStar(cx,cy,5,12,5);
+  fin(g,'pu_ghost')} // Ghost = brief invincibility
+
+  // Coin
+  {const g=mk(24,24),cx=12,cy=12;
+  g.fillStyle(0xffcc00);g.fillCircle(cx,cy,11);g.fillStyle(0xffaa00);g.fillCircle(cx,cy,9);g.fillStyle(0xffee66,.6);g.fillCircle(cx-3,cy-3,4);
+  fin(g,'coin')}
+
+  // Particles
+  {const g=mk(8,8);g.fillStyle(0xffffff);g.fillCircle(4,4,4);fin(g,'spark')}
+  {const g=mk(40,3);g.fillStyle(0xffffff);g.fillRect(0,0,40,3);fin(g,'streak')}
+  {const g=mk(6,6);g.fillStyle(0xffdd44);g.fillCircle(3,3,3);fin(g,'glitter')}
+  {const g=mk(10,10);g.fillStyle(0xffffff,.6);g.fillCircle(5,5,5);fin(g,'glow_dot')}
+
+  // Star + cloud for backgrounds
+  {const g=mk(3,3);g.fillStyle(0xffffff);g.fillRect(0,0,3,3);fin(g,'star')}
+  {const g=mk(60,40);
+  g.fillStyle(0xffffff,.55);g.fillEllipse(30,26,56,30);g.fillEllipse(20,20,34,24);g.fillEllipse(42,18,30,22);
+  fin(g,'cloud')}
+
+  // Level complete banner bg
+  {const g=mk(W,H);g.fillStyle(0x000000,.88);g.fillRect(0,0,W,H);fin(g,'dim_overlay')}
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  BOOT SCENE
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class BootScene extends Phaser.Scene{
+  constructor(){super({key:'Boot'})}
+  preload(){
+    const bar=this.add.rectangle(W/2,H/2,0,5,0x4fffb0);
+    this.load.on('progress',v=>bar.width=W*v);
+  }
+  create(){buildTextures(this);this.scene.start('Menu')}
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  MENU SCENE
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class MenuScene extends Phaser.Scene{
+  constructor(){super({key:'Menu'})}
+
+  create(){
+    this._bg();
+    this._title();
+    this._modeSelect();
+    this._footer();
+    this.cameras.main.fadeIn(500);
+  }
+
+  _bg(){
+    const g=this.add.graphics();
+    g.fillGradientStyle(0x060620,0x060620,0x0a1030,0x0a1030,1);
+    g.fillRect(0,0,W,H);
+    for(let i=0;i<130;i++){
+      const s=this.add.image(Phaser.Math.Between(0,W),Phaser.Math.Between(0,H),'star')
+        .setAlpha(Math.random()*.7+.1).setScale(Math.random()*2+.5);
+      this.tweens.add({targets:s,alpha:Math.random()*.1,yoyo:true,repeat:-1,
+        duration:Phaser.Math.Between(1000,4000),delay:Phaser.Math.Between(0,3000),ease:'Sine.easeInOut'});
+    }
+    for(let i=0;i<6;i++){
+      this.add.image(Phaser.Math.Between(-20,W+20),Phaser.Math.Between(80,H-80),'cloud')
+        .setAlpha(.05+Math.random()*.05).setScale(Phaser.Math.FloatBetween(2.5,5));
+    }
+  }
+
+  _title(){
+    const cx=W/2;
+    // Glow layer
+    this.add.text(cx,185,'RISE UP',{
+      fontFamily:'Impact,Arial Black,sans-serif',fontSize:'80px',color:'#4fffb0',
+      stroke:'#4fffb0',strokeThickness:24}).setOrigin(.5).setAlpha(.12);
+    const t=this.add.text(cx,185,'RISE UP',{
+      fontFamily:'Impact,Arial Black,sans-serif',fontSize:'80px',color:'#ffffff',
+      stroke:'#0a3322',strokeThickness:8,
+      shadow:{offsetX:4,offsetY:4,color:'#000',blur:14,fill:true}}).setOrigin(.5);
+    this.tweens.add({targets:t,y:193,yoyo:true,repeat:-1,duration:2200,ease:'Sine.easeInOut'});
+    this.add.text(cx,250,'— Shield the balloon · Reach for the stars —',{
+      fontFamily:'Courier New,monospace',fontSize:'12px',color:'#445566'}).setOrigin(.5);
+
+    // Stats bar
+    const hs=Store.getHighScore(), ml=Store.getMaxLevel(), coins=Store.getTotalCoins();
+    const stats=[[`🏆 ${hs}m`,'BEST SCORE'],[`⭐ Lvl ${ml}`,'MAX LEVEL'],[`🪙 ${coins}`,'COINS']];
+    stats.forEach(([val,lbl],i)=>{
+      const bx=70+i*130,by=295;
+      this.add.rectangle(bx,by,110,44,0x000000,.55);
+      this.add.rectangle(bx,by,110,44,0,0).setStrokeStyle(1,0x4fffb0,.3);
+      this.add.text(bx,by-7,val,{fontFamily:'Impact,Arial Black,sans-serif',fontSize:'17px',color:'#ffffff',stroke:'#000',strokeThickness:3}).setOrigin(.5);
+      this.add.text(bx,by+10,lbl,{fontFamily:'Courier New,monospace',fontSize:'9px',color:'#445566'}).setOrigin(.5);
+    });
+  }
+
+  _modeSelect(){
+    const cx=W/2;
+    // LEVEL MODE button
+    this._makeBtn(cx,390,'📋  LEVEL MODE','Levels 1 – 100  |  Story Progress',0x4fffb0,()=>{
+      this.cameras.main.fade(300,0,0,0);
+      this.time.delayedCall(320,()=>this.scene.start('LevelSelect'));
+    });
+    // ENDLESS MODE button
+    this._makeBtn(cx,490,'∞  ENDLESS MODE','Survive · Score · Leaderboard',0xffaa00,()=>{
+      this.cameras.main.fade(300,0,0,0);
+      this.time.delayedCall(320,()=>this.scene.start('Play',{mode:'endless',level:1}));
+    });
+  }
+
+  _makeBtn(x,y,title,sub,color,cb){
+    const hex='#'+color.toString(16).padStart(6,'0');
+    const box=this.add.rectangle(x,y,320,72,0x000000,.7).setInteractive({useHandCursor:true});
+    this.add.rectangle(x,y,320,72,0,0).setStrokeStyle(2,color,.8);
+    const t=this.add.text(x,y-10,title,{
+      fontFamily:'Impact,Arial Black,sans-serif',fontSize:'28px',color:hex,
+      stroke:'#000',strokeThickness:5}).setOrigin(.5);
+    this.add.text(x,y+16,sub,{
+      fontFamily:'Courier New,monospace',fontSize:'12px',color:'#667788'}).setOrigin(.5);
+
+    box.on('pointerover',()=>{
+      this.tweens.add({targets:[box,t],scaleX:1.03,scaleY:1.03,duration:100});
+    });
+    box.on('pointerout',()=>{
+      this.tweens.add({targets:[box,t],scaleX:1,scaleY:1,duration:100});
+    });
+    box.on('pointerdown',cb);
+  }
+
+  _footer(){
+    this.add.text(W/2,H-16,'Move mouse / touch to control the shield',{
+      fontFamily:'Courier New,monospace',fontSize:'11px',color:'#223344'}).setOrigin(.5);
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  LEVEL SELECT SCENE
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class LevelSelectScene extends Phaser.Scene{
+  constructor(){super({key:'LevelSelect'})}
+
+  create(){
+    this._page=0; // 0-9, each page = 10 levels
+    this._buildBg();
+    this._buildHeader();
+    this._buildGrid();
+    this._buildNav();
+    this.cameras.main.fadeIn(350);
+  }
+
+  _buildBg(){
+    const g=this.add.graphics();
+    g.fillGradientStyle(0x060618,0x060618,0x0c0c28,0x0c0c28,1);
+    g.fillRect(0,0,W,H);
+    for(let i=0;i<80;i++){
+      this.add.image(Phaser.Math.Between(0,W),Phaser.Math.Between(0,H),'star')
+        .setAlpha(Math.random()*.5+.1);
+    }
+  }
+
+  _buildHeader(){
+    this.add.text(W/2,30,'SELECT LEVEL',{
+      fontFamily:'Impact,Arial Black,sans-serif',fontSize:'32px',color:'#4fffb0',
+      stroke:'#002211',strokeThickness:6}).setOrigin(.5);
+    this.add.text(W/2,58,`Max Unlocked: Level ${Store.getMaxLevel()}`,{
+      fontFamily:'Courier New,monospace',fontSize:'13px',color:'#556677'}).setOrigin(.5);
+    // Theme preview label
+    this._themeLbl=this.add.text(W/2,H-52,'',{
+      fontFamily:'Courier New,monospace',fontSize:'12px',color:'#aabbcc'}).setOrigin(.5);
+  }
+
+  _buildGrid(){
+    this._btnGroup=this.add.group();
+    this._redrawGrid();
+  }
+
+  _redrawGrid(){
+    this._btnGroup.clear(true,true);
+    const maxUnlocked=Store.getMaxLevel();
+    const cols=5, rows=2, bw=66, bh=56, gapX=8, gapY=10;
+    const startX=W/2-(cols*(bw+gapX)-gapX)/2+bw/2;
+    const startY=100;
+
+    for(let row=0;row<rows;row++){
+      for(let col=0;col<cols;col++){
+        const idx=this._page*10+row*cols+col;
+        const lvl=idx+1;
+        if(lvl>MAX_LEVEL) continue;
+        const x=startX+col*(bw+gapX);
+        const y=startY+row*(bh+gapY);
+        const cfg=getLevelConfig(lvl);
+        const theme=cfg.theme;
+        const unlocked=lvl<=maxUnlocked;
+        const stars=Store.getLevelStars(lvl);
+
+        // Box
+        const skyHex='#'+theme.sky1.toString(16).padStart(6,'0');
+        const alpha=unlocked?.85:.4;
+        const box=this.add.rectangle(x,y,bw,bh,theme.sky1,alpha);
+        box.setStrokeStyle(unlocked?2:1, unlocked?theme.ambientLight:0x333344, unlocked?.9:.4);
+        this._btnGroup.add(box);
+
+        // Level number
+        const numCol=unlocked?'#ffffff':'#334455';
+        const num=this.add.text(x,y-8,`${lvl}`,{
+          fontFamily:'Impact,Arial Black,sans-serif',fontSize:'22px',color:numCol,
+          stroke:'#000',strokeThickness:4}).setOrigin(.5);
+        this._btnGroup.add(num);
+
+        // Stars earned
+        const starStr=['','★','★★','★★★'][stars];
+        const sc=this.add.text(x,y+14,starStr,{
+          fontFamily:'sans-serif',fontSize:'11px',color:'#ffdd44'}).setOrigin(.5);
+        this._btnGroup.add(sc);
+
+        // Lock icon
+        if(!unlocked){
+          const lk=this.add.text(x,y,'🔒',{fontSize:'18px'}).setOrigin(.5).setAlpha(.5);
+          this._btnGroup.add(lk);
+        }
+
+        // Click
+        if(unlocked){
+          box.setInteractive({useHandCursor:true});
+          box.on('pointerover',()=>{
+            box.setStrokeStyle(3,0xffffff,1);
+            this._themeLbl.setText(`Level ${lvl} — ${theme.name}`);
+          });
+          box.on('pointerout',()=>box.setStrokeStyle(2,theme.ambientLight,.9));
+          box.on('pointerdown',()=>{
+            this.cameras.main.fade(250,0,0,0);
+            this.time.delayedCall(270,()=>this.scene.start('Play',{mode:'level',level:lvl}));
+          });
+        }
+      }
+    }
+
+    // Theme label for current page
+    const themeIdx=this._page;
+    this._themeLbl.setText(`Theme: ${THEMES[themeIdx].name} (Levels ${themeIdx*10+1}–${themeIdx*10+10})`);
+  }
+
+  _buildNav(){
+    const backBtn=this.add.text(30,H-30,'← BACK',{
+      fontFamily:'Courier New,monospace',fontSize:'14px',color:'#4fffb0'})
+      .setInteractive({useHandCursor:true});
+    backBtn.on('pointerdown',()=>{
+      this.cameras.main.fade(250,0,0,0);
+      this.time.delayedCall(270,()=>this.scene.start('Menu'));
+    });
+
+    // Page indicators (one per theme decade)
+    for(let i=0;i<10;i++){
+      const dot=this.add.circle(W/2-45+i*10,H-28,4,i===this._page?0x4fffb0:0x223344)
+        .setInteractive({useHandCursor:true});
+      dot.on('pointerdown',()=>{
+        this._page=i;
+        this._redrawGrid();
+        // Refresh dots
+        this._buildNav();
+      });
+    }
+
+    // Prev / Next
+    if(this._page>0){
+      const prev=this.add.text(16,H/2,'◀',{fontFamily:'Impact',fontSize:'28px',color:'#4fffb0'})
+        .setInteractive({useHandCursor:true});
+      prev.on('pointerdown',()=>{this._page--;this._redrawGrid();this._buildNav();});
+    }
+    if(this._page<9){
+      const next=this.add.text(W-16,H/2,'▶',{fontFamily:'Impact',fontSize:'28px',color:'#4fffb0'})
+        .setOrigin(1,.5).setInteractive({useHandCursor:true});
+      next.on('pointerdown',()=>{this._page++;this._redrawGrid();this._buildNav();});
+    }
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PLAY SCENE  (handles both Level and Endless modes)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class PlayScene extends Phaser.Scene{
+  constructor(){super({key:'Play'})}
+
+  init(data){
+    this._mode   = data.mode  || 'endless';  // 'level' | 'endless'
+    this._lvlNum = data.level || 1;
+    this._cfg    = getLevelConfig(this._mode==='level'?this._lvlNum:1);
+  }
+
+  create(){
+    Store.incRuns();
+
+    this._alive      = true;
+    this._score      = 0;       // altitude metres
+    this._coins      = 0;
+    this._combo      = 0;
+    this._maxCombo   = 0;
+    this._shieldHP   = 3;
+    this._shieldInv  = false;
+    this._slowFactor = 1.0;
+    this._ptrX       = W/2;
+    this._ptrY       = H-230;
+    this._shVelX     = 0;
+    this._shVelY     = 0;
+    this._levelDone  = false;
+
+    // Endless: difficulty ramps infinitely; Level: fixed difficulty from cfg
+    this._diff = this._cfg.diff;
+
+    this._buildWorld();
+    this._buildEntities();
+    this._buildPickupGroups();
+    this._buildCollisions();
+    this._buildParticles();
+    this._buildHUD();
+    this._setupInput();
+
+    this._waveCtrl = new WaveController(this);
+
+    this.cameras.main.fadeIn(450);
+  }
+
+  update(time,delta){
+    if(!this._alive && !this._levelDone) return;
+    if(this._levelDone) return;
+
+    const dt = delta*this._slowFactor;
+
+    // Score
+    this._score += dt*0.005*this._diff;
+    const alt=Math.floor(this._score);
+
+    // Endless only: ramp difficulty
+    if(this._mode==='endless'){
+      this._diff = 1.0 + Math.floor(this._score/120)*0.14;
+    }
+
+    this._scrollWorld(dt);
+    this._updateShield(dt);
+    this._waveCtrl.update(time,dt,this._diff,this._score,this._cfg);
+    this._hud.update(alt,this._coins,this._combo,this._shieldHP,this._diff,
+                     this._mode,this._lvlNum,
+                     this._mode==='level'?this._cfg.targetAlt:0);
+
+    // Level mode: check if target reached
+    if(this._mode==='level' && alt>=this._cfg.targetAlt && !this._levelDone){
+      this._levelDone=true;
+      this._triggerLevelComplete();
+    }
+  }
+
+  // ── WORLD ────────────────────────────────────────────────────────────────────
+  _buildWorld(){
+    const th=this._cfg.theme;
+
+    // Background gradient (two rectangles)
+    const g=this.add.graphics();
+    g.fillGradientStyle(th.sky1,th.sky1,th.sky2,th.sky2,1);
+    g.fillRect(0,0,W,H);
+    this._bgGfx=g;
+
+    // Second layer tile (scrolled)
+    this._bgTile=this.add.tileSprite(0,0,W,H,'star').setOrigin(0,0).setAlpha(0);// placeholder, stars done below
+
+    // Stars
+    this._stars=[];
+    const sa=this._cfg.theme.starAlpha;
+    for(let i=0;i<160;i++){
+      const s=this.add.image(Phaser.Math.Between(0,W),Phaser.Math.Between(-H,H),'star')
+        .setAlpha(Math.random()*sa).setScale(Math.random()*2+.5);
+      this._stars.push({s,sp:Phaser.Math.FloatBetween(.02,.12)});
+    }
+
+    // Clouds
+    this._clouds=[];
+    const ca=this._cfg.theme.cloudAlpha;
+    const cs=this._cfg.theme.cloudScale;
+    for(let i=0;i<16;i++){
+      const layer=Math.floor(i/6);
+      const speeds=[.05,.12,.22];
+      const c=this.add.image(
+        Phaser.Math.Between(-20,W+20),Phaser.Math.Between(-H,H),'cloud')
+        .setAlpha(ca*(1-layer*.3)).setScale(cs*(1-.2*layer));
+      this._clouds.push({s:c,sp:speeds[layer]||.1});
+    }
+
+    this._obstacles=this.physics.add.group({allowGravity:false});
+  }
+
+  _scrollWorld(dt){
+    const spd=dt*.26*this._diff;
+    this._stars.forEach(d=>{
+      d.s.y+=spd*d.sp;
+      if(d.s.y>H+8){d.s.y=-8;d.s.x=Phaser.Math.Between(0,W)}
+    });
+    this._clouds.forEach(d=>{
+      d.s.y+=spd*d.sp;
+      if(d.s.y>H+80){d.s.y=-100;d.s.x=Phaser.Math.Between(-20,W+20)}
+    });
+  }
+
+  // ── ENTITIES ─────────────────────────────────────────────────────────────────
+  _buildEntities(){
+    const bx=W/2,by=H-150;
+
+    this._balloon=this.physics.add.sprite(bx,by,'balloon');
+    this._balloon.setCircle(24,6,4);
+    this._balloon.body.setAllowGravity(false);
+    this._balloon.body.immovable=true;
+    this._balloon.setDepth(12);
+    this.tweens.add({targets:this._balloon,y:by+8,yoyo:true,repeat:-1,duration:1300,ease:'Sine.easeInOut'});
+
+    this._shield=this.physics.add.image(bx,by-75,'shield');
+    this._shield.setCircle(35,5,5);
+    this._shield.body.setAllowGravity(false);
+    this._shield.setDepth(22);
+    this._updateShieldTint();
+
+    this.tweens.add({targets:this._shield,alpha:.72,yoyo:true,repeat:-1,duration:1100,ease:'Sine.easeInOut'});
+  }
+
+  _buildPickupGroups(){
+    this._powerups=this.physics.add.group({allowGravity:false});
+    this._coinGroup=this.physics.add.group({allowGravity:false});
+  }
+
+  // ── SHIELD ───────────────────────────────────────────────────────────────────
+  _updateShield(dt){
+    const t=1-Math.pow(.004,dt/1000);
+    const px=this._shield.x,py=this._shield.y;
+    this._shield.x=Phaser.Math.Clamp(Phaser.Math.Linear(px,this._ptrX,t),40,W-40);
+    this._shield.y=Phaser.Math.Clamp(Phaser.Math.Linear(py,this._ptrY,t),40,H-40);
+    this._shield.body.reset(this._shield.x,this._shield.y);
+    this._shVelX=(this._shield.x-px)/(dt/1000);
+    this._shVelY=(this._shield.y-py)/(dt/1000);
+    this._shield.angle+=this._shVelX*.05;
+  }
+
+  _updateShieldTint(){
+    const tints=[0xff0000,0xff6600,0xffcc00,0x4fffb0];
+    this._shield.setTint(tints[Phaser.Math.Clamp(this._shieldHP,0,3)]);
+  }
+
+  _damageShield(n){
+    if(this._shieldInv) return;
+    this._shieldHP=Math.max(0,this._shieldHP-n);
+    this._updateShieldTint();
+    this._hud.shieldFlash();
+    if(this._shieldHP<=0){
+      this._shieldInv=true;
+      this._shield.setAlpha(.25);
+      this.cameras.main.shake(280,.014);
+      this._hud.showMsg('⚠ SHIELD CRACKED!',0xff3355);
+      this.time.delayedCall(1600,()=>{
+        this._shieldHP=1;this._shieldInv=false;
+        this._updateShieldTint();this._shield.setAlpha(1);
+      });
+    }
+  }
+
+  // ── COLLISIONS ───────────────────────────────────────────────────────────────
+  _buildCollisions(){
+    this.physics.add.overlap(this._shield,this._obstacles,this._onShieldObs,null,this);
+    this.physics.add.overlap(this._balloon,this._obstacles,this._onBalloonObs,null,this);
+    this.physics.add.overlap([this._balloon,this._shield],this._powerups,this._onPowerup,null,this);
+    this.physics.add.overlap([this._balloon,this._shield],this._coinGroup,this._onCoin,null,this);
+  }
+
+  _onShieldObs(sh,obs){
+    if(!obs.active) return;
+    const dx=obs.x-sh.x, dy=obs.y-sh.y, len=Math.sqrt(dx*dx+dy*dy)||1;
+    const spd=Math.sqrt(this._shVelX**2+this._shVelY**2);
+    const force=(380+spd*.6)*this._diff;
+    obs.setVelocity((dx/len)*force+this._shVelX*.4,(dy/len)*force+this._shVelY*.4);
+    const mass=obs.getData('mass')||1;
+    this._emitSparks(sh.x+(dx/len)*34,sh.y+(dy/len)*34,mass);
+    if(mass>=2){this.cameras.main.shake(90*mass,.005*mass);if(!this._shieldInv)this._damageShield(1)}
+    else this.cameras.main.shake(55,.002);
+    obs.setData('deflected',true);
+    this.time.delayedCall(280,()=>{if(obs?.active)obs.setData('deflected',false)});
+    this._addCombo();
+  }
+
+  _onBalloonObs(balloon,obs){
+    if(!this._alive||obs.getData('deflected')) return;
+    this._alive=false;
+    this._triggerDeath();
+  }
+
+  _onPowerup(obj,pu){
+    if(!pu.active) return;
+    const type=pu.getData('type');
+    pu.destroy();
+    this._activatePowerup(type);
+    this._emitGlitter(pu.x,pu.y,0xffaa00);
+    this._hud.showMsg(type==='shield'?'🛡 SHIELD RESTORED!':type==='slow'?'⏱ SLOW-MO!':'👻 GHOST MODE!',0x4fffb0);
+  }
+
+  _onCoin(obj,c){
+    if(!c.active) return;
+    c.destroy();
+    this._coins++;
+    this._addCombo();
+    this._emitGlitter(c.x,c.y,0xffcc00);
+    this._hud.popCoin();
+  }
+
+  // ── POWERUPS ─────────────────────────────────────────────────────────────────
+  _activatePowerup(type){
+    if(type==='shield'){this._shieldHP=Math.min(3,this._shieldHP+2);this._updateShieldTint()}
+    if(type==='slow'){
+      this._slowFactor=.32;
+      this.time.delayedCall(5500,()=>{this._slowFactor=1.0});
+    }
+    if(type==='ghost'){
+      this._shieldInv=true;
+      this._shield.setTint(0x88ffff);
+      this.time.delayedCall(4000,()=>{this._shieldInv=false;this._updateShieldTint()});
+    }
+  }
+
+  spawnPowerup(x,y){
+    const types=['shield','slow','ghost'];
+    const type=Phaser.Math.RND.pick(types);
+    const keys={shield:'pu_shield',slow:'pu_slow',ghost:'pu_ghost'};
+    const pu=this.physics.add.image(x,y,keys[type]);
+    pu.setData('type',type);pu.body.setAllowGravity(false);
+    pu.setVelocityY(85);pu.setDepth(15);
+    this._powerups.add(pu);
+    this.tweens.add({targets:pu,angle:360,repeat:-1,duration:1100,ease:'Linear'});
+    this.tweens.add({targets:pu,alpha:.6,scaleX:1.15,scaleY:1.15,yoyo:true,repeat:-1,duration:550});
+    this.time.delayedCall(9000,()=>{if(pu?.active)pu.destroy()});
+  }
+
+  spawnCoin(x,y){
+    const c=this.physics.add.image(x,y,'coin');
+    c.body.setAllowGravity(false);
+    c.setVelocityY(100+Math.random()*40);
+    c.setVelocityX(Phaser.Math.Between(-35,35));
+    c.setDepth(14);
+    this._coinGroup.add(c);
+    this.time.delayedCall(7000,()=>{if(c?.active)c.destroy()});
+  }
+
+  // ── COMBO ────────────────────────────────────────────────────────────────────
+  _addCombo(){
+    this._combo++;
+    if(this._combo>this._maxCombo)this._maxCombo=this._combo;
+    if(this._comboTimer)this._comboTimer.remove();
+    this._comboTimer=this.time.delayedCall(2000,()=>{this._combo=0;this._hud.clearCombo()});
+    this._hud.showCombo(this._combo);
+    if(this._combo%5===0){
+      this._score+=this._combo*1.5;
+      this._hud.showMsg(`COMBO ×${this._combo}! +${Math.floor(this._combo*1.5)}m`,0xffdd44);
+    }
+  }
+
+  // ── PARTICLES ────────────────────────────────────────────────────────────────
+  _buildParticles(){
+    this._streaks=this.add.particles(0,0,'streak',{
+      x:{min:0,max:W},y:-4,speedY:{min:250,max:480},speedX:{min:-12,max:12},
+      lifespan:{min:450,max:1100},scale:{start:1,end:0},alpha:{start:.2,end:0},
+      frequency:50,quantity:1,rotate:{min:-6,max:6},blendMode:Phaser.BlendModes.ADD,
+    }).setDepth(28);
+  }
+
+  _emitSparks(x,y,mass=1){
+    const n=Math.floor(5+mass*5);
+    const b=this.add.particles(x,y,'spark',{
+      speed:{min:55,max:200+mass*55},scale:{start:.7+mass*.25,end:0},alpha:{start:1,end:0},
+      lifespan:380+mass*90,quantity:n,blendMode:Phaser.BlendModes.ADD,
+      tint:[0x4fffb0,0xffffff,0xaaffdd],emitting:false}).setDepth(26);
+    b.explode(n,x,y);
+    this.time.delayedCall(600,()=>b.destroy());
+  }
+
+  _emitGlitter(x,y,color){
+    const b=this.add.particles(x,y,'glitter',{
+      speed:{min:40,max:160},scale:{start:1,end:0},alpha:{start:1,end:0},
+      lifespan:580,quantity:14,blendMode:Phaser.BlendModes.ADD,tint:color,emitting:false}).setDepth(26);
+    b.explode(14,x,y);
+    this.time.delayedCall(750,()=>b.destroy());
+  }
+
+  _emitPop(x,y){
+    const b=this.add.particles(x,y,'spark',{
+      speed:{min:80,max:360},scale:{start:2,end:0},alpha:{start:1,end:0},
+      lifespan:850,quantity:38,blendMode:Phaser.BlendModes.ADD,
+      tint:[0xff2244,0xff8899,0xffccdd,0xffffff],emitting:false}).setDepth(38);
+    b.explode(38,x,y);
+    this.time.delayedCall(1200,()=>b.destroy());
+  }
+
+  // ── INPUT ────────────────────────────────────────────────────────────────────
+  _setupInput(){
+    this.input.on('pointermove',p=>{this._ptrX=p.x;this._ptrY=p.y});
+    this.input.on('pointerdown',p=>{this._ptrX=p.x;this._ptrY=p.y});
+  }
+
+  // ── HUD ──────────────────────────────────────────────────────────────────────
+  _buildHUD(){
+    this._hud=new PlayHUD(this,this._mode,this._lvlNum,this._cfg);
+  }
+
+  // ── LEVEL COMPLETE ────────────────────────────────────────────────────────────
+  _triggerLevelComplete(){
+    // Calculate stars: 1=completed, 2=no shield damage, 3=fast+no damage
+    const noShieldDmg = this._shieldHP===3;
+    const fastBonus   = this._score < this._cfg.targetAlt*1.15; // within 115% target
+    const stars = noShieldDmg && fastBonus ? 3 : noShieldDmg ? 2 : 1;
+
+    Store.saveLevelStars(this._lvlNum, stars);
+    Store.saveMaxLevel(Math.min(MAX_LEVEL, this._lvlNum+1));
+    Store.addCoins(this._coins);
+
+    // Pause waves
+    if(this._waveCtrl) this._waveCtrl.stop();
+
+    // Show overlay
+    this.time.delayedCall(400,()=>{
+      this.scene.start('LevelComplete',{
+        level:this._lvlNum,
+        stars,
+        coins:this._coins,
+        maxCombo:this._maxCombo,
+        alt:Math.floor(this._score),
+        nextUnlocked: this._lvlNum<MAX_LEVEL,
+      });
+    });
+  }
+
+  // ── DEATH ────────────────────────────────────────────────────────────────────
+  _triggerDeath(){
+    this._emitPop(this._balloon.x,this._balloon.y);
+    this._balloon.setVisible(false);
+    this.cameras.main.shake(380,.016);
+    this.cameras.main.flash(180,255,40,70);
+
+    const alt=Math.floor(this._score);
+    const newRecord=Store.saveHighScore(alt);
+    Store.addCoins(this._coins);
+
+    this.time.delayedCall(1100,()=>{
+      this.cameras.main.fade(450,0,0,0);
+      this.time.delayedCall(470,()=>{
+        this.scene.start('GameOver',{
+          mode:this._mode, level:this._lvlNum,
+          score:alt, newRecord,
+          highScore:Store.getHighScore(),
+          coins:this._coins,
+          maxCombo:this._maxCombo,
+          theme:this._cfg.theme.name,
+        });
+      });
+    });
+  }
+
+  get obstacleGroup(){return this._obstacles}
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  PLAY HUD
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class PlayHUD{
+  constructor(scene,mode,lvlNum,cfg){
+    this.scene=scene;
+    this._mode=mode;
+    const D=60;
+    const ts=(sz,col='#ffffff')=>({fontFamily:'Impact,Arial Black,sans-serif',fontSize:sz,color:col,stroke:'#000',strokeThickness:4});
+    const tm=(sz,col='#aabbcc')=>({fontFamily:'Courier New,monospace',fontSize:sz,color:col,stroke:'#000',strokeThickness:3});
+
+    // Mode badge (top-left)
+    const modeTxt=mode==='level'?`LVL ${lvlNum}`:'∞ ENDLESS';
+    const modeCol=mode==='level'?'#4fffb0':'#ffaa00';
+    this.add(scene.add.rectangle(50,16,90,26,0x000000,.7).setScrollFactor(0).setDepth(D));
+    this.add(scene.add.text(50,16,modeTxt,{...tm('13px',modeCol)}).setOrigin(.5).setScrollFactor(0).setDepth(D+1));
+
+    // Altitude (top-centre)
+    this._altTxt=scene.add.text(W/2,8,'0m',ts('36px')).setOrigin(.5,0).setScrollFactor(0).setDepth(D+1);
+    this.add(this._altTxt);
+
+    // In level mode: target / progress bar below alt
+    if(mode==='level'){
+      this.add(scene.add.text(W/2,46,`TARGET: ${cfg.targetAlt}m`,tm('11px','#556677')).setOrigin(.5,0).setScrollFactor(0).setDepth(D));
+      // Progress bar track
+      this.add(scene.add.rectangle(W/2,64,220,5,0x111122).setScrollFactor(0).setDepth(D));
+      this._progBar=scene.add.rectangle(W/2-110,64,0,5,0x4fffb0).setOrigin(0,.5).setScrollFactor(0).setDepth(D+1);
+      this.add(this._progBar);
+      this._targetAlt=cfg.targetAlt;
+    }
+
+    // Best (top-right, endless only)
+    if(mode==='endless'){
+      this._hsTxt=scene.add.text(W-10,8,`BEST ${Store.getHighScore()}m`,tm('12px','#445566')).setOrigin(1,0).setScrollFactor(0).setDepth(D);
+      this.add(this._hsTxt);
+    }
+
+    // Coins row
+    this.add(scene.add.image(W-28,36,'coin').setScrollFactor(0).setDepth(D).setScale(.85));
+    this._coinTxt=scene.add.text(W-42,28,'0',ts('20px','#ffdd44')).setOrigin(1,0).setScrollFactor(0).setDepth(D+1);
+    this.add(this._coinTxt);
+
+    // Shield pips (bottom-left)
+    this._pips=[];
+    scene.add.text(12,H-38,'SHIELD',tm('9px','#336655')).setScrollFactor(0).setDepth(D);
+    for(let i=0;i<3;i++){
+      const p=scene.add.rectangle(16+i*22,H-22,16,8,0x4fffb0).setScrollFactor(0).setDepth(D+1);
+      this._pips.push(p);
+    }
+
+    // Altitude progress bar (right edge)
+    scene.add.rectangle(W-3,0,6,H,0x111122,.8).setOrigin(.5,0).setScrollFactor(0).setDepth(D);
+    this._altBar=scene.add.rectangle(W-3,H,6,0,0x4fffb0).setOrigin(.5,1).setScrollFactor(0).setDepth(D+1);
+    this.add(this._altBar);
+
+    // Combo (bottom-centre)
+    this._comboTxt=scene.add.text(W/2,H-65,'',ts('26px','#ffdd44')).setOrigin(.5).setAlpha(0).setScrollFactor(0).setDepth(D+1);
+    this.add(this._comboTxt);
+
+    // Message text (floating)
+    this._msgTxt=scene.add.text(W/2,H/2-40,'',ts('19px','#4fffb0')).setOrigin(.5).setAlpha(0).setScrollFactor(0).setDepth(D+2);
+    this.add(this._msgTxt);
+
+    // Diff (bottom-right, subtle)
+    this._diffTxt=scene.add.text(W-10,H-10,'×1.0',tm('10px','#223344')).setOrigin(1,1).setScrollFactor(0).setDepth(D);
+    this.add(this._diffTxt);
+
+    this._all=[];
+  }
+
+  add(o){/* just keeping reference */}
+
+  update(alt,coins,combo,shieldHP,diff,mode,lvlNum,targetAlt){
+    this._altTxt.setText(alt+'m');
+    this._coinTxt.setText(coins);
+    this._diffTxt.setText('×'+diff.toFixed(1));
+    for(let i=0;i<3;i++) this._pips[i].setFillStyle(i<shieldHP?0x4fffb0:0x1a2233);
+    this._altBar.height=H*Math.min(1,(alt%600)/600);
+    if(mode==='endless' && alt>Store.getHighScore()) this._hsTxt?.setText('BEST '+alt+'m').setColor('#ffdd44');
+    if(mode==='level' && this._progBar){
+      const pct=Math.min(1,alt/targetAlt);
+      this._progBar.width=220*pct;
+    }
+  }
+
+  showCombo(n){
+    if(n<2)return;
+    this._comboTxt.setText('×'+n+' COMBO');
+    this.scene.tweens.killTweensOf(this._comboTxt);
+    this._comboTxt.setAlpha(1).setScale(1.2);
+    this.scene.tweens.add({targets:this._comboTxt,scaleX:1,scaleY:1,duration:180});
+  }
+
+  clearCombo(){this.scene.tweens.add({targets:this._comboTxt,alpha:0,duration:350})}
+
+  showMsg(txt,color=0x4fffb0){
+    const hex='#'+color.toString(16).padStart(6,'0');
+    this._msgTxt.setText(txt).setColor(hex);
+    this.scene.tweens.killTweensOf(this._msgTxt);
+    this._msgTxt.setAlpha(1).setY(H/2-40);
+    this.scene.tweens.add({targets:this._msgTxt,y:H/2-85,alpha:0,duration:1700,ease:'Power2'});
+  }
+
+  shieldFlash(){this._pips.forEach(p=>this.scene.tweens.add({targets:p,alpha:.15,yoyo:true,repeat:2,duration:90}))}
+
+  popCoin(){this.scene.tweens.add({targets:this.scene._hud._coinTxt,scaleX:1.4,scaleY:1.4,yoyo:true,duration:100})}
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  WAVE CONTROLLER
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class WaveController{
+  constructor(scene){
+    this.scene=scene;
+    this._cd=1400;
+    this._idx=0;
+    this._loops=0;
+    this._stopped=false;
+    this._sinceLastPU=0;
+    this._sinceLastCoin=0;
+  }
+
+  stop(){this._stopped=true}
+
+  update(time,dt,diff,score,cfg){
+    if(this._stopped) return;
+    this._diff=diff; this._score=score; this._cfg=cfg;
+    this._cd-=dt;
+    if(this._cd>0) return;
+
+    const patterns=cfg.patterns;
+    const name=patterns[this._idx%patterns.length];
+    this._idx++;
+    if(this._idx>0 && this._idx%patterns.length===0) this._loops++;
+
+    this._spawn(name);
+
+    // Inter-wave gap
+    const base=Math.max(700,2500-(diff-1)*700);
+    this._cd=base*(0.88+Math.random()*.24);
+
+    // Powerup every 7-10 waves
+    this._sinceLastPU++;
+    if(this._sinceLastPU>=Phaser.Math.Between(7,10)){
+      this._sinceLastPU=0;
+      this.scene.time.delayedCall(500,()=>{
+        if(this.scene._alive&&!this._stopped)
+          this.scene.spawnPowerup(Phaser.Math.Between(50,W-50),-20);
+      });
+    }
+
+    // Coins every 3-4 waves
+    this._sinceLastCoin++;
+    if(this._sinceLastCoin>=Phaser.Math.Between(3,4)){
+      this._sinceLastCoin=0;
+      const n=Phaser.Math.Between(2,4);
+      for(let i=0;i<n;i++) this.scene.time.delayedCall(i*200,()=>{
+        if(this.scene._alive&&!this._stopped)
+          this.scene.spawnCoin(Phaser.Math.Between(40,W-40),-18);
+      });
+    }
+  }
+
+  _spawn(name){
+    const fn=this['_p_'+name];
+    if(fn) fn.call(this); else this._p_fallingBlocks();
+  }
+
+  // ── helpers ──────────────────────────────────────────────────────────────────
+  _vel(){return(160+this._diff*90)*(1+this._loops*.15)}
+  _dens(){return Math.min(8,this._cfg.density+(this._loops*.4|0))}
+
+  _obs(x,y,key,mass){
+    const obs=this.scene.physics.add.image(x,y,key);
+    obs.body.setAllowGravity(false);
+    obs.setData('mass',mass||1);
+    obs.setDepth(6);
+    // Apply theme tint to obstacles
+    const th=this._cfg.theme;
+    const tints={block:th.blockTint,block_wide:th.blockTint,wall:th.wallTint,
+                 triangle:th.triTint,bar:th.barTint,spike:0xcc3300,bomb:0x222222};
+    if(tints[key]) obs.setTint(tints[key]);
+    this.scene.obstacleGroup.add(obs);
+    this._autoDie(obs);
+    return obs;
+  }
+  _autoDie(obs){
+    const t=this.scene.time.addEvent({delay:110,repeat:90,callback:()=>{
+      if(!obs?.active){t.remove();return}
+      if(obs.y>H+100||obs.x<-110||obs.x>W+110){obs.destroy();t.remove()}
+    }});
+  }
+  _spin(obs,dur){this.scene.tweens.add({targets:obs,angle:360,repeat:-1,duration:(dur||800)/this._diff,ease:'Linear'})}
+
+  // ── PATTERNS ─────────────────────────────────────────────────────────────────
+
+  _p_fallingBlocks(){
+    const n=this._dens(), v=this._vel();
+    for(let i=0;i<n;i++) this.scene.time.delayedCall(i*175,()=>{
+      if(!this.scene._alive||this._stopped)return;
+      const b=this._obs(Phaser.Math.Between(28,W-28),-28,'block',1);
+      b.setVelocityY(v); b.setVelocityX(Phaser.Math.Between(-45,45));
+    });
+  }
+
+  _p_theTunnel(){
+    const minGap=Math.max(110,200-(this._diff-1)*28);
+    const gapCX=Phaser.Math.Between(minGap/2+44,W-minGap/2-44);
+    const v=this._vel()*.72;
+    [gapCX-minGap/2-22, gapCX+minGap/2+22].forEach(x=>{
+      const w=this._obs(x,-70,'wall',3); w.setVelocityY(v);
+    });
+    if(this._diff>1.8) this.scene.time.delayedCall(380,()=>{
+      if(!this.scene._alive||this._stopped)return;
+      const b=this._obs(Phaser.Math.Between(gapCX-minGap/2+30,gapCX+minGap/2-30),-28,'block',1);
+      b.setVelocityY(v*1.1);
+    });
+  }
+
+  _p_theWall(){
+    const bw=50,v=this._vel()*.68,count=Math.ceil(W/bw)+2;
+    const gapIdx=Phaser.Math.Between(1,count-2);
+    const blocks=[];
+    for(let i=0;i<count;i++){
+      if(i===gapIdx)continue;
+      const b=this._obs(i*bw+bw/2-bw,-14,'block_wide',1);
+      b.setVelocityY(v); blocks.push(b);
+    }
+    this.scene.tweens.add({targets:blocks,x:`+=${Phaser.Math.Between(-55,55)}`,yoyo:true,repeat:2,duration:700,ease:'Sine.easeInOut'});
+  }
+
+  _p_thePendulum(){
+    const ax=Phaser.Math.Between(90,W-90),v=this._vel()*.52;
+    const bar=this._obs(ax,-10,'bar',2); bar.setVelocityY(v);
+    this.scene.tweens.add({
+      targets:bar,angle:{from:Phaser.Math.Between(-52,-40),to:Phaser.Math.Between(40,52)},
+      yoyo:true,repeat:5,duration:Math.max(380,680/this._diff),ease:'Sine.easeInOut',
+      onComplete:()=>{if(bar?.active)bar.destroy()}
+    });
+  }
+
+  _p_theShredder(){
+    [{x:W*.25,y:-50},{x:W/2,y:-80},{x:W*.75,y:-50}].forEach(({x,y},i)=>{
+      this.scene.time.delayedCall(i*110,()=>{
+        if(!this.scene._alive||this._stopped)return;
+        const t=this._obs(x,y,'triangle',1.5); t.setVelocityY(this._vel()*.88); this._spin(t,700);
+      });
+    });
+  }
+
+  _p_spikeDrop(){
+    const x=Phaser.Math.Between(60,W-60),n=Math.min(6,3+Math.floor(this._diff));
+    for(let i=0;i<n;i++) this.scene.time.delayedCall(i*135,()=>{
+      if(!this.scene._alive||this._stopped)return;
+      const s=this._obs(x+Phaser.Math.Between(-18,18),-18,'spike',1.2);
+      s.setVelocityY(this._vel()*1.1); s.setVelocityX(Phaser.Math.Between(-28,28));
+    });
+  }
+
+  _p_spikeRain(){
+    const n=Math.min(10,4+Math.floor(this._diff*1.4));
+    for(let i=0;i<n;i++) this.scene.time.delayedCall(i*110,()=>{
+      if(!this.scene._alive||this._stopped)return;
+      const s=this._obs(Phaser.Math.Between(18,W-18),-18,'spike',1);
+      s.setVelocityY(this._vel()*.92); s.setAngle(Phaser.Math.Between(-18,18));
+    });
+  }
+
+  _p_theGauntlet(){
+    this._p_theTunnel();
+    this.scene.time.delayedCall(650,()=>{if(!this.scene._alive||this._stopped)return;this._p_thePendulum()});
+    if(this._diff>1.5) this.scene.time.delayedCall(280,()=>{if(!this.scene._alive||this._stopped)return;this._p_spikeDrop()});
+  }
+
+  _p_crossfire(){
+    // Obstacles shoot in from both sides
+    const v=this._vel()*.8;
+    for(let i=0;i<3;i++){
+      this.scene.time.delayedCall(i*220,()=>{
+        if(!this.scene._alive||this._stopped)return;
+        const y=Phaser.Math.Between(80,H-300);
+        const bL=this._obs(-30,y,'block',1); bL.setVelocityX(v);
+        const bR=this._obs(W+30,y,'block',1); bR.setVelocityX(-v);
+      });
+    }
+    this.scene.time.delayedCall(300,()=>{if(!this.scene._alive||this._stopped)return;this._p_fallingBlocks()});
+  }
+
+  _p_vortex(){
+    // Spiral of triangles descending
+    const cx=W/2, n=6, r=80;
+    for(let i=0;i<n;i++){
+      const angle=Phaser.Math.DegToRad(i*(360/n));
+      const x=cx+Math.cos(angle)*r, y=-40-i*20;
+      this.scene.time.delayedCall(i*90,()=>{
+        if(!this.scene._alive||this._stopped)return;
+        const t=this._obs(x,y,'triangle',1.5);
+        t.setVelocityY(this._vel()*.8);
+        t.setVelocityX(Math.cos(angle+Math.PI/2)*120);
+        this._spin(t,600);
+      });
+    }
+  }
+
+  _p_apocalypse(){
+    // Everything at once
+    this._p_theTunnel();
+    this.scene.time.delayedCall(200,()=>{if(!this.scene._alive||this._stopped)return;this._p_theShredder()});
+    this.scene.time.delayedCall(450,()=>{if(!this.scene._alive||this._stopped)return;this._p_spikeRain()});
+    this.scene.time.delayedCall(700,()=>{if(!this.scene._alive||this._stopped)return;this._p_thePendulum()});
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  LEVEL COMPLETE SCENE
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class LevelCompleteScene extends Phaser.Scene{
+  constructor(){super({key:'LevelComplete'})}
+  init(data){this._d=data}
+
+  create(){
+    const d=this._d, cx=W/2;
+    const cfg=getLevelConfig(d.level);
+    const nextCfg=d.level<MAX_LEVEL?getLevelConfig(d.level+1):null;
+
+    // Themed background
+    const g=this.add.graphics();
+    g.fillGradientStyle(cfg.theme.sky1,cfg.theme.sky1,cfg.theme.sky2,cfg.theme.sky2,1);
+    g.fillRect(0,0,W,H);
+    // Stars
+    for(let i=0;i<100;i++) this.add.image(Phaser.Math.Between(0,W),Phaser.Math.Between(0,H),'star').setAlpha(Math.random()*.6+.1);
+
+    // LEVEL COMPLETE banner
+    const banner=this.add.text(cx,-70,'LEVEL COMPLETE!',{
+      fontFamily:'Impact,Arial Black,sans-serif',fontSize:'44px',color:'#4fffb0',
+      stroke:'#002211',strokeThickness:8,
+      shadow:{offsetX:3,offsetY:3,color:'#000',blur:12,fill:true}}).setOrigin(.5);
+    this.tweens.add({targets:banner,y:80,duration:600,ease:'Back.easeOut'});
+
+    // Level number
+    this.time.delayedCall(200,()=>{
+      this.add.text(cx,138,`LEVEL  ${d.level}`,{
+        fontFamily:'Courier New,monospace',fontSize:'16px',color:'#667788'}).setOrigin(.5);
+    });
+
+    // Theme name
+    this.time.delayedCall(250,()=>{
+      this.add.text(cx,160,cfg.theme.name.toUpperCase(),{
+        fontFamily:'Courier New,monospace',fontSize:'13px',
+        color:'#'+cfg.theme.ambientLight.toString(16).padStart(6,'0')}).setOrigin(.5);
+    });
+
+    // Stars display (animated)
+    this.time.delayedCall(400,()=>this._showStars(d.stars,cx,220));
+
+    // Stats
+    this.time.delayedCall(700,()=>this._showStats(d,cfg,cx));
+
+    // Next level preview
+    if(nextCfg && d.level<MAX_LEVEL){
+      this.time.delayedCall(900,()=>this._showNextPreview(nextCfg,cx));
+    }
+
+    // Buttons
+    this.time.delayedCall(1100,()=>this._showButtons(d,cx));
+
+    this.cameras.main.fadeIn(400);
+  }
+
+  _showStars(count,cx,y){
+    const starData=['★','★','★'];
+    starData.forEach((s,i)=>{
+      const earned=i<count;
+      const sx=cx-40+i*40;
+      const star=this.add.text(sx,y,s,{
+        fontFamily:'sans-serif',fontSize:'44px',
+        color:earned?'#ffdd44':'#223344'}).setOrigin(.5).setScale(0);
+      this.tweens.add({
+        targets:star,scaleX:1,scaleY:1,
+        duration:300,delay:i*150,ease:'Back.easeOut',
+        onComplete:()=>{
+          if(earned){
+            this.tweens.add({targets:star,scaleX:1.1,scaleY:1.1,yoyo:true,repeat:-1,duration:800+i*100});
+          }
+        }
+      });
+    });
+  }
+
+  _showStats(d,cfg,cx){
+    const rows=[
+      ['Altitude',d.alt+'m','🚀'],
+      ['Coins',d.coins,'🪙'],
+      ['Max Combo','×'+d.maxCombo,'⚡'],
+    ];
+    rows.forEach(([lbl,val,icon],i)=>{
+      const bx=cx, by=330+i*50;
+      const row=this.add.text(bx,by,`${icon}  ${lbl}`,{
+        fontFamily:'Courier New,monospace',fontSize:'14px',color:'#556677'}).setOrigin(.5).setAlpha(0);
+      const valTxt=this.add.text(bx+80,by,val,{
+        fontFamily:'Impact,Arial Black,sans-serif',fontSize:'20px',color:'#ffffff',
+        stroke:'#000',strokeThickness:3}).setOrigin(.5).setAlpha(0);
+      this.tweens.add({targets:[row,valTxt],alpha:1,x:`-=80`,duration:350,delay:i*100,ease:'Power2'});
+    });
+  }
+
+  _showNextPreview(nextCfg,cx){
+    const y=490;
+    this.add.text(cx,y,'NEXT LEVEL',{fontFamily:'Courier New,monospace',fontSize:'11px',color:'#334455'}).setOrigin(.5);
+    const box=this.add.rectangle(cx,y+24,240,36,nextCfg.theme.sky1,.8);
+    box.setStrokeStyle(1.5,nextCfg.theme.ambientLight,.7);
+    this.add.text(cx,y+16,`Level ${nextCfg.lvl}`,{
+      fontFamily:'Impact,Arial Black,sans-serif',fontSize:'18px',color:'#ffffff',stroke:'#000',strokeThickness:3}).setOrigin(.5);
+    this.add.text(cx,y+30,nextCfg.theme.name,{
+      fontFamily:'Courier New,monospace',fontSize:'11px',
+      color:'#'+nextCfg.theme.ambientLight.toString(16).padStart(6,'0')}).setOrigin(.5);
+  }
+
+  _showButtons(d,cx){
+    // Next level (if unlocked)
+    if(d.nextUnlocked && d.level<MAX_LEVEL){
+      const btn=this.add.text(cx,580,'[ NEXT LEVEL → ]',{
+        fontFamily:'Impact,Arial Black,sans-serif',fontSize:'30px',color:'#4fffb0',
+        stroke:'#002211',strokeThickness:5}).setOrigin(.5).setAlpha(0).setInteractive({useHandCursor:true});
+      this.tweens.add({targets:btn,alpha:1,duration:350});
+      btn.on('pointerover',()=>btn.setColor('#ffffff').setScale(1.04));
+      btn.on('pointerout', ()=>btn.setColor('#4fffb0').setScale(1));
+      btn.on('pointerdown',()=>{
+        this.cameras.main.fade(280,0,0,0);
+        this.time.delayedCall(300,()=>this.scene.start('Play',{mode:'level',level:d.level+1}));
+      });
+    } else if(d.level>=MAX_LEVEL){
+      this.add.text(cx,580,'🎉 ALL 100 LEVELS COMPLETE! 🎉',{
+        fontFamily:'Impact,Arial Black,sans-serif',fontSize:'20px',color:'#ffdd44',
+        stroke:'#000',strokeThickness:4}).setOrigin(.5);
+    }
+
+    // Replay
+    const replay=this.add.text(cx,628,'Replay Level',{
+      fontFamily:'Courier New,monospace',fontSize:'14px',color:'#445566'}).setOrigin(.5).setInteractive({useHandCursor:true});
+    replay.on('pointerdown',()=>{
+      this.cameras.main.fade(250,0,0,0);
+      this.time.delayedCall(270,()=>this.scene.start('Play',{mode:'level',level:d.level}));
+    });
+
+    // Level select
+    const sel=this.add.text(cx,654,'Level Select',{
+      fontFamily:'Courier New,monospace',fontSize:'13px',color:'#334455'}).setOrigin(.5).setInteractive({useHandCursor:true});
+    sel.on('pointerdown',()=>{
+      this.cameras.main.fade(250,0,0,0);
+      this.time.delayedCall(270,()=>this.scene.start('LevelSelect'));
+    });
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GAME OVER SCENE
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+class GameOverScene extends Phaser.Scene{
+  constructor(){super({key:'GameOver'})}
+  init(data){this._d=data||{}}
+
+  create(){
+    const d=this._d, cx=W/2;
+    const g=this.add.graphics();
+    g.fillGradientStyle(0x0a0006,0x0a0006,0x160010,0x160010,1);
+    g.fillRect(0,0,W,H);
+    for(let i=0;i<90;i++) this.add.image(Phaser.Math.Between(0,W),Phaser.Math.Between(0,H),'star').setAlpha(Math.random()*.5+.1);
+
+    // Title
+    const title=this.add.text(cx,-80,'POPPED!',{
+      fontFamily:'Impact,Arial Black,sans-serif',fontSize:'68px',color:'#ff3355',
+      stroke:'#330011',strokeThickness:10,
+      shadow:{offsetX:4,offsetY:4,color:'#000',blur:16,fill:true}}).setOrigin(.5);
+    this.tweens.add({targets:title,y:140,duration:580,ease:'Back.easeOut'});
+
+    // Mode tag
+    const modeTag=d.mode==='level'?`LEVEL ${d.level}`:'ENDLESS MODE';
+    this.add.text(cx,200,modeTag,{
+      fontFamily:'Courier New,monospace',fontSize:'14px',color:'#445566'}).setOrigin(.5);
+
+    // Score
+    this.time.delayedCall(200,()=>{
+      const sc=this.add.text(cx,238,`${d.score||0}m`,{
+        fontFamily:'Impact,Arial Black,sans-serif',fontSize:'58px',color:'#ffffff',
+        stroke:'#000',strokeThickness:6}).setOrigin(.5).setAlpha(0).setScale(.7);
+      this.tweens.add({targets:sc,alpha:1,scaleX:1,scaleY:1,duration:380,ease:'Back.easeOut'});
+      this.add.text(cx,286,'— altitude reached —',{
+        fontFamily:'Courier New,monospace',fontSize:'12px',color:'#556677'}).setOrigin(.5);
+    });
+
+    // New record
+    if(d.newRecord){
+      this.time.delayedCall(500,()=>{
+        const rec=this.add.text(cx,316,'✦ NEW RECORD ✦',{
+          fontFamily:'Impact,Arial Black,sans-serif',fontSize:'24px',color:'#ffdd44',
+          stroke:'#000',strokeThickness:5}).setOrigin(.5);
+        this.tweens.add({targets:rec,scaleX:1.1,scaleY:1.1,yoyo:true,repeat:-1,duration:500});
+      });
+    } else {
+      this.time.delayedCall(400,()=>{
+        this.add.text(cx,316,`Best: ${d.highScore||0}m`,{
+          fontFamily:'Courier New,monospace',fontSize:'15px',color:'#3a4a55'}).setOrigin(.5);
+      });
+    }
+
+    // Stats
+    this.time.delayedCall(600,()=>this._stats(d,cx));
+    this.time.delayedCall(800,()=>this._buttons(d,cx));
+    this.cameras.main.fadeIn(400);
+  }
+
+  _stats(d,cx){
+    const items=[['COINS',d.coins||0,'🪙'],['MAX COMBO','×'+(d.maxCombo||0),'⚡'],['THEME',d.theme||'?','🌍']];
+    const bw=82,bh=60,gap=9,totalW=items.length*(bw+gap)-gap;
+    items.forEach(([lbl,val,ic],i)=>{
+      const bx=cx-totalW/2+i*(bw+gap)+bw/2, by=375;
+      this.add.rectangle(bx,by,bw,bh,0x000000,.65);
+      this.add.rectangle(bx,by,bw,bh,0,0).setStrokeStyle(1.5,0x4fffb0,.25);
+      this.add.text(bx,by-17,ic,{fontSize:'16px'}).setOrigin(.5);
+      this.add.text(bx,by+1,''+val,{fontFamily:'Impact,Arial Black,sans-serif',fontSize:'18px',color:'#fff',stroke:'#000',strokeThickness:3}).setOrigin(.5);
+      this.add.text(bx,by+17,lbl,{fontFamily:'Courier New,monospace',fontSize:'9px',color:'#445566'}).setOrigin(.5);
+    });
+  }
+
+  _buttons(d,cx){
+    // Retry
+    const label=d.mode==='level'?'[ RETRY LEVEL ]':'[ RISE AGAIN ]';
+    const retry=this.add.text(cx,460,label,{
+      fontFamily:'Impact,Arial Black,sans-serif',fontSize:'34px',color:'#4fffb0',
+      stroke:'#002211',strokeThickness:6}).setOrigin(.5).setAlpha(0).setInteractive({useHandCursor:true});
+    this.tweens.add({targets:retry,alpha:1,duration:380});
+    retry.on('pointerover',()=>retry.setColor('#fff').setScale(1.04));
+    retry.on('pointerout', ()=>retry.setColor('#4fffb0').setScale(1));
+    retry.on('pointerdown',()=>{
+      this.cameras.main.fade(280,0,0,0);
+      this.time.delayedCall(300,()=>this.scene.start('Play',{mode:d.mode,level:d.level}));
+    });
+
+    // Level select / menu
+    const secLabel=d.mode==='level'?'Level Select':'Main Menu';
+    const sec=this.add.text(cx,516,secLabel,{
+      fontFamily:'Courier New,monospace',fontSize:'16px',color:'#334455'}).setOrigin(.5).setAlpha(0).setInteractive({useHandCursor:true});
+    this.tweens.add({targets:sec,alpha:1,duration:480,delay:150});
+    sec.on('pointerover',()=>sec.setColor('#aabbcc'));
+    sec.on('pointerout', ()=>sec.setColor('#334455'));
+    sec.on('pointerdown',()=>{
+      this.cameras.main.fade(280,0,0,0);
+      this.time.delayedCall(300,()=>this.scene.start(d.mode==='level'?'LevelSelect':'Menu'));
+    });
+
+    // Main menu always
+    if(d.mode==='level'){
+      const menu=this.add.text(cx,548,'Main Menu',{
+        fontFamily:'Courier New,monospace',fontSize:'13px',color:'#223344'}).setOrigin(.5).setInteractive({useHandCursor:true});
+      menu.on('pointerdown',()=>{
+        this.cameras.main.fade(260,0,0,0);
+        this.time.delayedCall(280,()=>this.scene.start('Menu'));
+      });
+    }
+
+    // Share
+    const share=this.add.text(cx,590,'📋 Share Score',{
+      fontFamily:'Courier New,monospace',fontSize:'12px',color:'#2a3a44'}).setOrigin(.5).setInteractive({useHandCursor:true});
+    share.on('pointerdown',()=>{
+      const txt=`I reached ${d.score||0}m in Rise Up! 🎈 ${d.mode==='level'?'Level '+d.level:'Endless Mode'}`;
+      navigator.clipboard?.writeText(txt).then(()=>share.setText('✅ Copied!'));
+    });
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+//  GAME CONFIG
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+new Phaser.Game({
+  type:Phaser.AUTO,
+  width:W, height:H,
+  backgroundColor:'#06060f',
+  parent:document.body,
+  physics:{default:'arcade',arcade:{gravity:{y:0},fps:120,overlapBias:64,debug:false}},
+  scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH},
+  scene:[BootScene,MenuScene,LevelSelectScene,PlayScene,LevelCompleteScene,GameOverScene],
+});
+</script>
+</body>
+</html>

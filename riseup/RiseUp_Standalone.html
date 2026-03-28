@@ -1,0 +1,1304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Rise Up</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      background:#0a0a1a;
+      display:flex; align-items:center; justify-content:center;
+      height:100vh; overflow:hidden;
+    }
+    canvas { display:block; }
+  </style>
+</head>
+<body>
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+<script>
+// ═══ src/systems/StorageManager.js ═══
+// src/systems/StorageManager.js
+// Thin wrapper around localStorage for score persistence.
+
+const StorageManager = {
+  _KEY: 'riseup_highscore',
+
+  getHighScore() {
+    try {
+      return parseInt(localStorage.getItem(this._KEY) || '0', 10);
+    } catch {
+      return 0;
+    }
+  },
+
+  saveHighScore(score) {
+    try {
+      const current = this.getHighScore();
+      if (score > current) {
+        localStorage.setItem(this._KEY, String(score));
+        return true;   // new record
+      }
+    } catch { /* storage unavailable */ }
+    return false;
+  },
+
+  clearHighScore() {
+    try { localStorage.removeItem(this._KEY); } catch { /* */ }
+  },
+};
+
+
+// ═══ src/entities/Balloon.js ═══
+// src/entities/Balloon.js
+// The balloon stays fixed in the lower-centre of the screen.
+// It does NOT move — the scrolling world gives the illusion of ascent.
+
+class Balloon {
+  /**
+   * @param {Phaser.Scene} scene
+   * @param {number} x
+   * @param {number} y
+   */
+  constructor(scene, x, y) {
+    this.scene = scene;
+
+    this.sprite = scene.physics.add.sprite(x, y, 'balloon');
+    this.sprite.setCircle(
+      26,              // radius (slightly smaller than visual for forgiveness)
+      2,               // offsetX
+      2                // offsetY
+    );
+    this.sprite.body.setAllowGravity(false);
+    this.sprite.body.immovable = true;    // doesn't get pushed
+    this.sprite.setDepth(10);
+
+    // Gentle bob tween
+    scene.tweens.add({
+      targets: this.sprite,
+      y: y + 8,
+      yoyo: true,
+      repeat: -1,
+      duration: 1200,
+      ease: 'Sine.easeInOut',
+    });
+  }
+
+  /** Called every frame — keeps the balloon anchored */
+  keepAlive() {
+    this.sprite.body.setVelocity(0, 0);
+  }
+
+  destroy() {
+    this.sprite.destroy();
+  }
+}
+
+
+// ═══ src/entities/Shield.js ═══
+// src/entities/Shield.js
+// The shield lerps toward the pointer, giving it physical momentum so it
+// naturally knocks obstacles sideways.
+
+class Shield {
+  /**
+   * @param {Phaser.Scene} scene
+   * @param {number} x
+   * @param {number} y
+   */
+  constructor(scene, x, y) {
+    this.scene = scene;
+
+    // Actual physics object for collision detection
+    this.body_obj = scene.physics.add.image(x, y, 'shield');
+    this.body_obj.setCircle(
+      34,              // radius matches visual ring
+      2,               // offsetX
+      2                // offsetY
+    );
+    this.body_obj.body.setAllowGravity(false);
+    this.body_obj.body.immovable  = false;
+    this.body_obj.body.useDamping = false;
+
+    // BULLET mode — never tunnels through fast obstacles
+    this.body_obj.body.setBounce(1.0);
+    this.body_obj.setDepth(20);
+
+    // Track previous position to compute velocity for knockback
+    this._prevX = x;
+    this._prevY = y;
+    this._velX  = 0;
+    this._velY  = 0;
+
+    // Visual glow pulse
+    scene.tweens.add({
+      targets: this.body_obj,
+      alpha: 0.75,
+      yoyo: true,
+      repeat: -1,
+      duration: 900,
+      ease: 'Sine.easeInOut',
+    });
+  }
+
+  /**
+   * Smoothly lerp the shield toward the active pointer.
+   * Lerp factor is high enough to feel responsive but low enough to
+   * preserve momentum for obstacle knockback.
+   *
+   * @param {Phaser.Input.Pointer} pointer
+   * @param {number} delta  — frame delta in ms
+   */
+  lerpToPointer(pointer, delta) {
+    const lerpFactor = 1 - Math.pow(0.006, delta / 1000);  // frame-rate independent
+
+    const targetX = Phaser.Math.Clamp(pointer.x, 34, GAME_WIDTH  - 34);
+    const targetY = Phaser.Math.Clamp(pointer.y, 34, GAME_HEIGHT - 34);
+
+    const newX = Phaser.Math.Linear(this.body_obj.x, targetX, lerpFactor);
+    const newY = Phaser.Math.Linear(this.body_obj.y, targetY, lerpFactor);
+
+    // Derive velocity from displacement (used for knockback force)
+    this._velX = (newX - this._prevX) / (delta / 1000);
+    this._velY = (newY - this._prevY) / (delta / 1000);
+
+    this.body_obj.x = newX;
+    this.body_obj.y = newY;
+    this.body_obj.body.reset(newX, newY);   // keep physics body in sync
+
+    this._prevX = newX;
+    this._prevY = newY;
+
+    // Slight rotation to show movement direction
+    this.body_obj.angle += (this._velX * 0.04);
+  }
+
+  get velocityX() { return this._velX; }
+  get velocityY() { return this._velY; }
+
+  destroy() {
+    this.body_obj.destroy();
+  }
+}
+
+
+// ═══ src/entities/Obstacle.js ═══
+// src/entities/Obstacle.js
+// Thin factory/helper — WaveController calls these to get configured physics sprites.
+
+const ObstacleFactory = {
+
+  /**
+   * Create a basic rectangular block obstacle.
+   * @param {Phaser.Scene}        scene
+   * @param {Phaser.Physics.Arcade.Group} group
+   * @param {number} x
+   * @param {number} y
+   * @param {string} [textureKey='block']
+   * @param {number} [mass=1]
+   * @returns {Phaser.Physics.Arcade.Image}
+   */
+  block(scene, group, x, y, textureKey = 'block', mass = 1) {
+    const obj = scene.physics.add.image(x, y, textureKey);
+    obj.body.setAllowGravity(false);
+    obj.body.immovable = false;
+    obj.setData('mass', mass);
+    obj.setDepth(5);
+    group.add(obj);
+    return obj;
+  },
+
+  /**
+   * Create a wall segment (taller block).
+   */
+  wall(scene, group, x, y) {
+    const obj = scene.physics.add.image(x, y, 'wall');
+    obj.body.setAllowGravity(false);
+    obj.body.immovable = true;   // walls don't get pushed
+    obj.setData('mass', 3);
+    obj.setDepth(5);
+    group.add(obj);
+    return obj;
+  },
+
+  /**
+   * Create a triangle obstacle.
+   */
+  triangle(scene, group, x, y) {
+    const obj = scene.physics.add.image(x, y, 'triangle');
+    obj.body.setAllowGravity(false);
+    obj.setData('mass', 1.5);
+    obj.setDepth(5);
+    group.add(obj);
+    return obj;
+  },
+
+  /**
+   * Create a pendulum bar (pivots around anchor via tween).
+   */
+  bar(scene, group, x, y) {
+    const obj = scene.physics.add.image(x, y, 'bar');
+    obj.body.setAllowGravity(false);
+    obj.setData('mass', 2);
+    obj.setDepth(5);
+    group.add(obj);
+    return obj;
+  },
+
+  /** Remove obstacle cleanly */
+  destroy(obj) {
+    if (obj && obj.active) {
+      obj.destroy();
+    }
+  },
+};
+
+
+// ═══ src/systems/WaveController.js ═══
+// src/systems/WaveController.js
+// Manages curated obstacle patterns, dynamic scaling, and endless looping.
+
+class WaveController {
+  /**
+   * @param {Phaser.Scene}                    scene
+   * @param {Phaser.Physics.Arcade.Group}     group
+   */
+  constructor(scene, group) {
+    this.scene      = scene;
+    this.group      = group;
+    this._diff      = 1.0;        // set externally by PlayScene
+    this._waveIndex = 0;          // current position in pattern queue
+    this._loopCount = 0;          // how many full loops completed
+    this._cooldown  = 0;          // ms until next wave spawns
+    this._active    = [];         // live obstacle refs for cleanup
+    this._baseDelay = 2800;       // ms between waves at diff=1
+
+    // Curated pattern queue — loops with increasing difficulty
+    this._patternQueue = [
+      'theTunnel',
+      'fallingBlocks',
+      'thePendulum',
+      'theWall',
+      'theShredder',
+      'theGauntlet',
+    ];
+  }
+
+  setDifficulty(d) { this._diff = d; }
+
+  update(time, delta) {
+    this._cooldown -= delta;
+    if (this._cooldown > 0) return;
+
+    // Pick next pattern
+    const patternName = this._patternQueue[this._waveIndex % this._patternQueue.length];
+
+    // Advance; loop detection
+    this._waveIndex++;
+    if (this._waveIndex > 0 && this._waveIndex % this._patternQueue.length === 0) {
+      this._loopCount++;
+    }
+
+    // Spawn
+    this._spawn(patternName);
+
+    // Reduce inter-wave delay as difficulty grows
+    const delayMultiplier = Math.max(0.4, 1 - (this._diff - 1) * 0.18);
+    this._cooldown = this._baseDelay * delayMultiplier;
+  }
+
+  // ── Pattern Dispatcher ────────────────────────────────────────────────────────
+
+  _spawn(name) {
+    const methods = {
+      theTunnel:     () => this._patternTunnel(),
+      fallingBlocks: () => this._patternFallingBlocks(),
+      thePendulum:   () => this._patternPendulum(),
+      theWall:       () => this._patternWall(),
+      theShredder:   () => this._patternShredder(),
+      theGauntlet:   () => this._patternGauntlet(),
+    };
+    (methods[name] || methods.fallingBlocks)();
+  }
+
+  // ── Speed/density helpers ─────────────────────────────────────────────────────
+
+  _vel()     { return 200 * this._diff * (1 + this._loopCount * 0.2); }
+  _density() { return Math.min(6, 2 + Math.floor(this._loopCount * 0.5)); }
+
+  // ── Patterns ──────────────────────────────────────────────────────────────────
+
+  /**
+   * THE TUNNEL — two tall wall segments slide in from the sides,
+   * leaving a shrinking gap in the centre the player must thread.
+   */
+  _patternTunnel() {
+    const gapWidth = Phaser.Math.Between(160, 220) / this._diff;
+    const gapCX    = GAME_WIDTH / 2;
+    const spawnY   = -70;
+    const vel      = this._vel() * 0.75;
+
+    // Left wall
+    const left  = ObstacleFactory.wall(this.scene, this.group, gapCX - gapWidth / 2 - 30, spawnY);
+    // Right wall
+    const right = ObstacleFactory.wall(this.scene, this.group, gapCX + gapWidth / 2 + 30, spawnY);
+
+    [left, right].forEach(w => {
+      w.setVelocityY(vel);
+      this._autoDestroy(w);
+      this._active.push(w);
+    });
+  }
+
+  /**
+   * FALLING BLOCKS — random scattering of blocks from the top.
+   */
+  _patternFallingBlocks() {
+    const count = this._density();
+    const vel   = this._vel();
+
+    for (let i = 0; i < count; i++) {
+      this.scene.time.delayedCall(i * 160, () => {
+        if (!this.scene.scene.isActive('PlayScene')) return;
+        const x = Phaser.Math.Between(30, GAME_WIDTH - 30);
+        const b = ObstacleFactory.block(this.scene, this.group, x, -30);
+        b.setVelocityY(vel);
+        b.setVelocityX(Phaser.Math.Between(-60, 60));
+        this._autoDestroy(b);
+        this._active.push(b);
+      });
+    }
+  }
+
+  /**
+   * THE PENDULUM — a long bar anchored at the top swings like a pendulum.
+   * We fake the physics with a tween on angle.
+   */
+  _patternPendulum() {
+    const anchorX = Phaser.Math.Between(80, GAME_WIDTH - 80);
+    const anchorY = -10;
+    const bar     = ObstacleFactory.bar(this.scene, this.group, anchorX, anchorY + 9);
+
+    // Move downward slowly
+    bar.setVelocityY(this._vel() * 0.4);
+
+    // Swing tween
+    this.scene.tweens.add({
+      targets: bar,
+      angle:   { from: -55, to: 55 },
+      yoyo:    true,
+      repeat:  4,
+      duration: 700 / this._diff,
+      ease:    'Sine.easeInOut',
+      onComplete: () => ObstacleFactory.destroy(bar),
+    });
+
+    this._active.push(bar);
+  }
+
+  /**
+   * THE WALL — a full-width row of blocks with ONE moving gap.
+   * Gap starts at a random position and drifts horizontally.
+   */
+  _patternWall() {
+    const blockW  = 52;
+    const blockH  = 24;
+    const spawnY  = -blockH;
+    const vel     = this._vel() * 0.65;
+    const count   = Math.ceil(GAME_WIDTH / blockW) + 1;
+    const gapIdx  = Phaser.Math.Between(1, count - 2);  // never at edge
+
+    for (let i = 0; i < count; i++) {
+      if (i === gapIdx) continue;   // leave the gap
+
+      const x = i * blockW + blockW / 2;
+      const b = ObstacleFactory.block(this.scene, this.group, x, spawnY);
+      b.setVelocityY(vel);
+      this._autoDestroy(b);
+      this._active.push(b);
+    }
+
+    // Drift the wall slightly so the gap oscillates
+    const allBlocks = this._active.slice(-count + 1);
+    this.scene.tweens.add({
+      targets:  allBlocks,
+      x:        `+=${Phaser.Math.Between(-50, 50)}`,
+      yoyo:     true,
+      repeat:   -1,
+      duration: 800,
+      ease:     'Sine.easeInOut',
+    });
+  }
+
+  /**
+   * THE SHREDDER — three triangles descend in a rotating formation.
+   */
+  _patternShredder() {
+    const cx  = GAME_WIDTH / 2;
+    const vel = this._vel();
+    const positions = [
+      { x: cx - 80, y: -40 },
+      { x: cx,      y: -80 },
+      { x: cx + 80, y: -40 },
+    ];
+
+    positions.forEach(({ x, y }, i) => {
+      this.scene.time.delayedCall(i * 80, () => {
+        if (!this.scene.scene.isActive('PlayScene')) return;
+        const t = ObstacleFactory.triangle(this.scene, this.group, x, y);
+        t.setVelocityY(vel * 0.9);
+
+        // Spin!
+        this.scene.tweens.add({
+          targets:  t,
+          angle:    360,
+          repeat:   -1,
+          duration: 800 / this._diff,
+          ease:     'Linear',
+        });
+
+        this._autoDestroy(t);
+        this._active.push(t);
+      });
+    });
+  }
+
+  /**
+   * THE GAUNTLET — combines tunnel sides with falling blocks in the gap.
+   * Appears only after first loop.
+   */
+  _patternGauntlet() {
+    if (this._loopCount === 0) {
+      // First loop — do a simpler version
+      this._patternTunnel();
+      return;
+    }
+
+    this._patternTunnel();
+
+    // After a short delay, drop blocks through the gap
+    this.scene.time.delayedCall(600, () => {
+      if (!this.scene.scene.isActive('PlayScene')) return;
+      this._patternFallingBlocks();
+    });
+  }
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────────
+
+  /** Auto-destroy obstacle when it travels past the bottom of the screen */
+  _autoDestroy(obj) {
+    const checkTimer = this.scene.time.addEvent({
+      delay:    100,
+      repeat:   80,
+      callback: () => {
+        if (!obj || !obj.active) { checkTimer.remove(); return; }
+        if (obj.y > GAME_HEIGHT + 100) {
+          ObstacleFactory.destroy(obj);
+          checkTimer.remove();
+        }
+      },
+    });
+  }
+}
+
+
+// ═══ src/systems/ParticleManager.js ═══
+// src/systems/ParticleManager.js
+// Wraps Phaser 3 particle emitters for visual polish.
+
+class ParticleManager {
+  /**
+   * @param {Phaser.Scene} scene
+   */
+  constructor(scene) {
+    this.scene = scene;
+    this._streakEmitter = null;
+  }
+
+  // ── Wind Streaks ──────────────────────────────────────────────────────────────
+
+  startWindStreaks() {
+    this._streakEmitter = this.scene.add.particles(0, 0, 'streak', {
+      x:          { min: 0, max: GAME_WIDTH },
+      y:          { min: -10, max: -10 },
+      speedY:     { min: 280, max: 520 },
+      speedX:     { min: -20, max: 20 },
+      lifespan:   { min: 600, max: 1200 },
+      scale:      { start: 1, end: 0 },
+      alpha:      { start: 0.25, end: 0 },
+      quantity:   1,
+      frequency:  55,
+      rotate:     { min: -5, max: 5 },
+      blendMode:  Phaser.BlendModes.ADD,
+    });
+    this._streakEmitter.setDepth(25);
+  }
+
+  setWindSpeed(multiplier) {
+    if (!this._streakEmitter) return;
+    this._streakEmitter.setParticleSpeed(
+      { min: -20 * multiplier, max: 20 * multiplier },
+      { min: 280 * multiplier, max: 520 * multiplier }
+    );
+  }
+
+  // ── Pop Effect ────────────────────────────────────────────────────────────────
+
+  emitPop(x, y) {
+    // Burst emitter — fires once then stops
+    const burst = this.scene.add.particles(x, y, 'spark', {
+      speed:      { min: 80, max: 320 },
+      scale:      { start: 1.4, end: 0 },
+      alpha:      { start: 1, end: 0 },
+      lifespan:   700,
+      quantity:   28,
+      blendMode:  Phaser.BlendModes.ADD,
+      tint:       [0xff4466, 0xff8899, 0xffccdd, 0xffffff],
+      emitting:   false,
+    });
+    burst.setDepth(30);
+    burst.explode(28, x, y);
+
+    // Secondary debris
+    const debris = this.scene.add.particles(x, y, 'block', {
+      speed:      { min: 40, max: 180 },
+      scale:      { start: 0.4, end: 0 },
+      alpha:      { start: 0.9, end: 0 },
+      lifespan:   900,
+      quantity:   8,
+      emitting:   false,
+    });
+    debris.setDepth(29);
+    debris.explode(8, x, y);
+
+    // Cleanup after animation
+    this.scene.time.delayedCall(1200, () => {
+      burst.destroy();
+      debris.destroy();
+    });
+  }
+
+  destroy() {
+    this._streakEmitter?.destroy();
+  }
+}
+
+
+// ═══ src/ui/HUD.js ═══
+// src/ui/HUD.js
+// Heads-Up Display: altitude meter, high score, difficulty indicator.
+
+class HUD {
+  /**
+   * @param {Phaser.Scene} scene
+   */
+  constructor(scene) {
+    this.scene = scene;
+    this._score     = 0;
+    this._highScore = StorageManager.getHighScore();
+
+    const textStyle = {
+      fontFamily: 'Courier New, monospace',
+      fontSize: '15px',
+      color: '#aabbcc',
+      stroke: '#000000',
+      strokeThickness: 3,
+    };
+
+    // Altitude label
+    this._altLabel = scene.add
+      .text(10, 12, 'ALT', { ...textStyle, fontSize: '11px', color: '#556677' })
+      .setDepth(50)
+      .setScrollFactor(0);
+
+    // Score (big)
+    this._scoreText = scene.add
+      .text(10, 22, '0m', {
+        fontFamily: 'Impact, Arial Black, sans-serif',
+        fontSize:   '32px',
+        color:      '#ffffff',
+        stroke:     '#000000',
+        strokeThickness: 5,
+      })
+      .setDepth(50)
+      .setScrollFactor(0);
+
+    // High score (top right)
+    this._hsText = scene.add
+      .text(GAME_WIDTH - 10, 12, `BEST ${this._highScore}m`, {
+        ...textStyle, fontSize: '13px',
+      })
+      .setOrigin(1, 0)
+      .setDepth(50)
+      .setScrollFactor(0);
+
+    // Altitude bar (thin vertical strip, right edge)
+    this._barBg = scene.add.rectangle(GAME_WIDTH - 4, GAME_HEIGHT, 4, GAME_HEIGHT, 0x223344)
+      .setOrigin(0.5, 1)
+      .setDepth(50)
+      .setScrollFactor(0);
+
+    this._barFill = scene.add.rectangle(GAME_WIDTH - 4, GAME_HEIGHT, 4, 0, 0x4fffb0)
+      .setOrigin(0.5, 1)
+      .setDepth(51)
+      .setScrollFactor(0);
+  }
+
+  /**
+   * @param {number} score — altitude in metres
+   */
+  setScore(score) {
+    this._score = score;
+    this._scoreText.setText(`${score}m`);
+
+    // Update high score text live
+    if (score > this._highScore) {
+      this._highScore = score;
+      this._hsText.setText(`BEST ${score}m`).setColor('#ffdd44');
+    }
+
+    // Progress bar — shows last 500 m of progress
+    const pct = Math.min(1, (score % 500) / 500);
+    this._barFill.height = GAME_HEIGHT * pct;
+  }
+}
+
+
+// ═══ src/scenes/BootScene.js ═══
+// src/scenes/BootScene.js
+
+class BootScene extends Phaser.Scene {
+  constructor() { super({ key: 'BootScene' }); }
+
+  preload() {
+    // Tiny loading bar for the preloader itself
+    const bar = this.add.rectangle(
+      GAME_WIDTH / 2, GAME_HEIGHT / 2,
+      0, 6, 0x4fffb0
+    );
+    this.load.on('progress', v => bar.width = GAME_WIDTH * v);
+  }
+
+  create() {
+    // Seed global registry values
+    this.registry.set('score',    0);
+    this.registry.set('highScore', StorageManager.getHighScore());
+    this.registry.set('difficulty', 1.0);
+
+    this.scene.start('PreloadScene');
+  }
+}
+
+
+// ═══ src/scenes/PreloadScene.js ═══
+// src/scenes/PreloadScene.js
+// All textures are generated via canvas so the game runs with zero external assets.
+// To swap in real PNGs: replace the generate*() calls with this.load.image() here,
+// then remove the generate calls — key names stay the same throughout the codebase.
+
+class PreloadScene extends Phaser.Scene {
+  constructor() { super({ key: 'PreloadScene' }); }
+
+  create() {
+    this._generateBalloon();
+    this._generateShield();
+    this._generateObstacles();
+    this._generateParticles();
+    this._generateBackgroundLayers();
+
+    this.scene.start('MenuScene');
+  }
+
+  // ── Balloon ─────────────────────────────────────────────────────────────────
+
+  _generateBalloon() {
+    const r = 28;
+    const g = this.make.graphics({ add: false });
+
+    // Main body gradient simulation (canvas only has fill, fake with layered circles)
+    g.fillStyle(0xff4466, 1);
+    g.fillCircle(r, r, r);
+    g.fillStyle(0xff88aa, 0.5);
+    g.fillCircle(r - 8, r - 8, r * 0.55);
+    g.fillStyle(0xffffff, 0.2);
+    g.fillCircle(r - 12, r - 12, r * 0.3);
+
+    // Knot
+    g.fillStyle(0xcc2244, 1);
+    g.fillRect(r - 4, r * 2 - 2, 8, 8);
+
+    // String
+    g.lineStyle(1.5, 0xffccdd, 1);
+    g.beginPath();
+    g.moveTo(r, r * 2 + 6);
+    g.lineTo(r - 4, r * 2 + 20);
+    g.strokePath();
+
+    g.generateTexture('balloon', r * 2, r * 2 + 22);
+    g.destroy();
+  }
+
+  // ── Shield ───────────────────────────────────────────────────────────────────
+
+  _generateShield() {
+    const r = 38;
+    const g = this.make.graphics({ add: false });
+
+    // Outer ring
+    g.lineStyle(4, 0x4fffb0, 1);
+    g.strokeCircle(r, r, r - 3);
+
+    // Inner glow ring
+    g.lineStyle(2, 0x4fffb0, 0.4);
+    g.strokeCircle(r, r, r - 10);
+
+    // Center cross-hatch
+    g.lineStyle(1, 0x4fffb0, 0.25);
+    g.beginPath();
+    g.moveTo(r, 4); g.lineTo(r, r * 2 - 4);
+    g.moveTo(4, r); g.lineTo(r * 2 - 4, r);
+    g.strokePath();
+
+    g.generateTexture('shield', r * 2, r * 2);
+    g.destroy();
+  }
+
+  // ── Obstacles ────────────────────────────────────────────────────────────────
+
+  _generateObstacles() {
+    // Rectangular block (used for walls, tunnel, wall-gap)
+    const bg = this.make.graphics({ add: false });
+    bg.fillStyle(0x334466, 1);
+    bg.fillRect(0, 0, 60, 24);
+    bg.lineStyle(2, 0x5577aa, 1);
+    bg.strokeRect(1, 1, 58, 22);
+    // Rivets
+    bg.fillStyle(0x7799cc, 1);
+    [8, 28, 48].forEach(x => bg.fillCircle(x, 12, 3));
+    bg.generateTexture('block', 60, 24);
+    bg.destroy();
+
+    // Tall wall segment (for tunnel sides, pendulum)
+    const wg = this.make.graphics({ add: false });
+    wg.fillStyle(0x223355, 1);
+    wg.fillRect(0, 0, 40, 120);
+    wg.lineStyle(2, 0x4466aa, 1);
+    wg.strokeRect(1, 1, 38, 118);
+    wg.generateTexture('wall', 40, 120);
+    wg.destroy();
+
+    // Triangle / shredder blade
+    const tg = this.make.graphics({ add: false });
+    tg.fillStyle(0xff6633, 1);
+    tg.fillTriangle(30, 0, 60, 60, 0, 60);
+    tg.lineStyle(2, 0xff9966, 1);
+    tg.strokeTriangle(30, 0, 60, 60, 0, 60);
+    tg.generateTexture('triangle', 60, 60);
+    tg.destroy();
+
+    // Pendulum bar
+    const pg = this.make.graphics({ add: false });
+    pg.fillStyle(0x556688, 1);
+    pg.fillRect(0, 0, 120, 18);
+    pg.lineStyle(2, 0x8899bb, 1);
+    pg.strokeRect(1, 1, 118, 16);
+    pg.generateTexture('bar', 120, 18);
+    pg.destroy();
+  }
+
+  // ── Particles ────────────────────────────────────────────────────────────────
+
+  _generateParticles() {
+    // Wind streak
+    const sg = this.make.graphics({ add: false });
+    sg.fillStyle(0xffffff, 1);
+    sg.fillRect(0, 0, 40, 2);
+    sg.generateTexture('streak', 40, 2);
+    sg.destroy();
+
+    // Pop spark
+    const pk = this.make.graphics({ add: false });
+    pk.fillStyle(0xff4466, 1);
+    pk.fillCircle(6, 6, 6);
+    pk.generateTexture('spark', 12, 12);
+    pk.destroy();
+
+    // Tiny cloud puff
+    const cg = this.make.graphics({ add: false });
+    cg.fillStyle(0xffffff, 0.7);
+    cg.fillCircle(20, 14, 14);
+    cg.fillCircle(34, 10, 10);
+    cg.fillCircle(8,  12, 10);
+    cg.fillCircle(26, 20, 10);
+    cg.generateTexture('cloud', 48, 32);
+    cg.destroy();
+
+    // Star (far background)
+    const stg = this.make.graphics({ add: false });
+    stg.fillStyle(0xffffff, 1);
+    stg.fillCircle(2, 2, 2);
+    stg.generateTexture('star', 4, 4);
+    stg.destroy();
+  }
+
+  // ── Parallax Background Layers ───────────────────────────────────────────────
+
+  _generateBackgroundLayers() {
+    // Layer 0: deep space gradient
+    const deep = this.make.graphics({ add: false });
+    deep.fillGradientStyle(0x0a0a2a, 0x0a0a2a, 0x0a1a3a, 0x0a1a3a, 1);
+    deep.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+    deep.generateTexture('bg_deep', GAME_WIDTH, GAME_HEIGHT);
+    deep.destroy();
+
+    // Layer 1: mid sky
+    const mid = this.make.graphics({ add: false });
+    mid.fillGradientStyle(0x112244, 0x112244, 0x1a3a6a, 0x1a3a6a, 1);
+    mid.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+    mid.generateTexture('bg_mid', GAME_WIDTH, GAME_HEIGHT);
+    mid.destroy();
+  }
+}
+
+
+// ═══ src/scenes/MenuScene.js ═══
+// src/scenes/MenuScene.js
+
+class MenuScene extends Phaser.Scene {
+  constructor() { super({ key: 'MenuScene' }); }
+
+  create() {
+    const cx = GAME_WIDTH / 2;
+    this._buildBackground();
+
+    // Title
+    const title = this.add.text(cx, 200, 'RISE UP', {
+      fontFamily: 'Impact, Arial Black, sans-serif',
+      fontSize: '72px',
+      color: '#4fffb0',
+      stroke: '#003322',
+      strokeThickness: 8,
+      shadow: { offsetX: 3, offsetY: 3, color: '#000', blur: 8, fill: true },
+    }).setOrigin(0.5);
+
+    this.tweens.add({
+      targets: title,
+      y: 210,
+      yoyo: true,
+      repeat: -1,
+      duration: 1800,
+      ease: 'Sine.easeInOut',
+    });
+
+    // High score
+    const hs = StorageManager.getHighScore();
+    this.add.text(cx, 310, `BEST: ${hs}m`, {
+      fontFamily: 'Courier New, monospace',
+      fontSize: '22px',
+      color: '#ffdd44',
+    }).setOrigin(0.5);
+
+    // Tap to play prompt
+    const tap = this.add.text(cx, 500, 'TAP TO RISE', {
+      fontFamily: 'Impact, Arial Black, sans-serif',
+      fontSize: '28px',
+      color: '#ffffff',
+    }).setOrigin(0.5);
+
+    this.tweens.add({
+      targets: tap,
+      alpha: 0.2,
+      yoyo: true,
+      repeat: -1,
+      duration: 800,
+      ease: 'Sine.easeInOut',
+    });
+
+    // Credits
+    this.add.text(cx, GAME_HEIGHT - 24, 'Shield the balloon · Don\'t touch the walls', {
+      fontFamily: 'Courier New, monospace',
+      fontSize: '12px',
+      color: '#667788',
+    }).setOrigin(0.5);
+
+    // Start on any input
+    this.input.once('pointerdown', () => {
+      this.cameras.main.fade(300, 0, 0, 0);
+      this.time.delayedCall(310, () => this.scene.start('PlayScene'));
+    });
+  }
+
+  _buildBackground() {
+    this.add.image(0, 0, 'bg_deep').setOrigin(0, 0);
+
+    // Scatter stars
+    for (let i = 0; i < 80; i++) {
+      const x = Phaser.Math.Between(0, GAME_WIDTH);
+      const y = Phaser.Math.Between(0, GAME_HEIGHT);
+      const s = this.add.image(x, y, 'star').setAlpha(Math.random() * 0.8 + 0.2);
+      this.tweens.add({
+        targets: s,
+        alpha: Math.random() * 0.3,
+        yoyo: true,
+        repeat: -1,
+        duration: Phaser.Math.Between(1000, 3000),
+        ease: 'Sine.easeInOut',
+        delay: Phaser.Math.Between(0, 2000),
+      });
+    }
+
+    // A few drifting clouds
+    for (let i = 0; i < 5; i++) {
+      const c = this.add.image(
+        Phaser.Math.Between(-40, GAME_WIDTH + 40),
+        Phaser.Math.Between(100, GAME_HEIGHT - 100),
+        'cloud'
+      ).setAlpha(0.12).setScale(Phaser.Math.FloatBetween(1.5, 3.5));
+      this.tweens.add({
+        targets: c, x: c.x + Phaser.Math.Between(40, 80),
+        yoyo: true, repeat: -1,
+        duration: Phaser.Math.Between(6000, 12000),
+        ease: 'Sine.easeInOut',
+      });
+    }
+  }
+}
+
+
+// ═══ src/scenes/PlayScene.js ═══
+// src/scenes/PlayScene.js
+
+class PlayScene extends Phaser.Scene {
+  constructor() { super({ key: 'PlayScene' }); }
+
+  // ── Lifecycle ────────────────────────────────────────────────────────────────
+
+  create() {
+    this._alive       = true;
+    this._score       = 0;
+    this._difficulty  = 1.0;
+    this._shakeTime   = 0;
+
+    this._buildParallax();
+    this._buildPhysicsGroups();
+    this._buildEntities();
+    this._buildSystems();
+    this._buildCollisions();
+    this._buildInput();
+
+    this.hud = new HUD(this);
+    this.cameras.main.fadeIn(400);
+
+    // Wind-streak particles (cosmetic only — no physics)
+    this.particleManager = new ParticleManager(this);
+    this.particleManager.startWindStreaks();
+  }
+
+  update(time, delta) {
+    if (!this._alive) return;
+
+    // Score = altitude in metres (1 metre per 4 px scrolled upward)
+    this._score += delta * 0.004 * this._difficulty;
+    this.hud.setScore(Math.floor(this._score));
+
+    // Ramp difficulty every 100 m
+    this._difficulty = 1.0 + Math.floor(this._score / 100) * 0.12;
+    this.waveController.setDifficulty(this._difficulty);
+
+    // Parallax scroll
+    this._scrollParallax(delta);
+
+    // Shield lerp toward pointer
+    this.shield.lerpToPointer(this.input.activePointer, delta);
+
+    // Wave controller tick
+    this.waveController.update(time, delta);
+
+    // Screen shake decay
+    if (this._shakeTime > 0) {
+      this._shakeTime -= delta;
+      if (this._shakeTime <= 0) this.cameras.main.resetFX();
+    }
+
+    // Keep balloon fixed vertically — it never moves, the world scrolls
+    this.balloon.keepAlive();
+  }
+
+  // ── Build helpers ────────────────────────────────────────────────────────────
+
+  _buildParallax() {
+    // Three layers at different scroll speeds
+    this._layers = [
+      { img: this.add.tileSprite(0, 0, GAME_WIDTH, GAME_HEIGHT, 'bg_deep')
+               .setOrigin(0,0).setAlpha(1),   speed: 0 },
+      { img: this.add.tileSprite(0, 0, GAME_WIDTH, GAME_HEIGHT, 'bg_mid')
+               .setOrigin(0,0).setAlpha(0.6), speed: 0.3 },
+    ];
+
+    // Procedural star/cloud sprites on two deeper layers
+    this._starSprites  = this._scatterDecor('star',  100, 0.06);
+    this._cloudSprites = this._scatterDecor('cloud',  12, 0.18);
+  }
+
+  _scatterDecor(key, count, speed) {
+    const arr = [];
+    for (let i = 0; i < count; i++) {
+      const x = Phaser.Math.Between(0, GAME_WIDTH);
+      const y = Phaser.Math.Between(-GAME_HEIGHT, GAME_HEIGHT);
+      const sc = key === 'cloud' ? Phaser.Math.FloatBetween(1, 3) : 1;
+      const s = this.add.image(x, y, key)
+        .setAlpha(key === 'cloud' ? 0.07 : Phaser.Math.FloatBetween(0.2, 0.9))
+        .setScale(sc);
+      arr.push({ sprite: s, speed, startY: y });
+    }
+    return arr;
+  }
+
+  _scrollParallax(delta) {
+    const scrollPx = delta * 0.22 * this._difficulty;
+
+    this._layers.forEach(l => {
+      if (l.speed > 0) l.img.tilePositionY -= scrollPx * l.speed;
+    });
+
+    const wrap = (sprites, speed) => {
+      sprites.forEach(d => {
+        d.sprite.y += scrollPx * speed;
+        if (d.sprite.y > GAME_HEIGHT + 80) {
+          d.sprite.y = -80;
+          d.sprite.x = Phaser.Math.Between(0, GAME_WIDTH);
+        }
+      });
+    };
+
+    wrap(this._starSprites,  0.04);
+    wrap(this._cloudSprites, 0.14);
+  }
+
+  _buildPhysicsGroups() {
+    // Static group for non-moving obstacles that can still have velocity via tween
+    this.obstacleGroup = this.physics.add.group({
+      allowGravity: false,
+      immovable: false,
+    });
+  }
+
+  _buildEntities() {
+    const cx = GAME_WIDTH / 2;
+    const cy = GAME_HEIGHT - 160;
+
+    this.balloon = new Balloon(this, cx, cy);
+    this.shield  = new Shield(this, cx, cy - 60);
+  }
+
+  _buildSystems() {
+    this.waveController = new WaveController(this, this.obstacleGroup);
+  }
+
+  _buildCollisions() {
+    // Shield overlaps obstacles — pushes them aside
+    this.physics.add.overlap(
+      this.shield.body_obj,
+      this.obstacleGroup,
+      this._onShieldHit,
+      null,
+      this
+    );
+
+    // Balloon overlaps obstacles — game over
+    this.physics.add.overlap(
+      this.balloon.sprite,
+      this.obstacleGroup,
+      this._onBalloonHit,
+      null,
+      this
+    );
+  }
+
+  _buildInput() {
+    // Mouse / touch — shield follows pointer (lerped in update)
+    this.input.on('pointerdown', () => { /* handled in Shield */ });
+  }
+
+  // ── Collision Handlers ───────────────────────────────────────────────────────
+
+  _onShieldHit(shieldObj, obstacle) {
+    // Give obstacle velocity based on shield's momentum direction
+    const dx = obstacle.x - shieldObj.x;
+    const dy = obstacle.y - shieldObj.y;
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+
+    const force = 480 * this._difficulty;
+    obstacle.setVelocity((dx / len) * force, (dy / len) * force);
+
+    // Screen shake proportional to obstacle mass
+    const mass = obstacle.getData('mass') || 1;
+    if (mass >= 1) {
+      this.cameras.main.shake(120 * mass, 0.006 * mass);
+      this._shakeTime = 120 * mass;
+    }
+  }
+
+  _onBalloonHit(balloonSprite /*, obstacle */) {
+    if (!this._alive) return;
+    this._alive = false;
+    this._endGame();
+  }
+
+  _endGame() {
+    // Pop effect
+    this.particleManager.emitPop(this.balloon.sprite.x, this.balloon.sprite.y);
+    this.balloon.sprite.setVisible(false);
+
+    // Save high score
+    const score = Math.floor(this._score);
+    StorageManager.saveHighScore(score);
+
+    this.time.delayedCall(900, () => {
+      this.cameras.main.fade(400, 0, 0, 0);
+      this.time.delayedCall(420, () => {
+        this.scene.start('GameOverScene', { score, highScore: StorageManager.getHighScore() });
+      });
+    });
+  }
+
+  // ── Public API (used by WaveController / HUD) ────────────────────────────────
+
+  get score()      { return this._score; }
+  get difficulty() { return this._difficulty; }
+}
+
+
+// ═══ src/scenes/GameOverScene.js ═══
+// src/scenes/GameOverScene.js
+
+class GameOverScene extends Phaser.Scene {
+  constructor() { super({ key: 'GameOverScene' }); }
+
+  init(data) {
+    this._score     = data.score     || 0;
+    this._highScore = data.highScore || 0;
+  }
+
+  create() {
+    const cx = GAME_WIDTH / 2;
+    const isNewRecord = this._score >= this._highScore;
+
+    this.add.image(0, 0, 'bg_deep').setOrigin(0, 0);
+
+    // Title
+    this.add.text(cx, 160, 'POPPED!', {
+      fontFamily: 'Impact, Arial Black, sans-serif',
+      fontSize: '64px',
+      color: '#ff4466',
+      stroke: '#330011',
+      strokeThickness: 8,
+    }).setOrigin(0.5);
+
+    // Score
+    this.add.text(cx, 270, `${this._score}m`, {
+      fontFamily: 'Impact, Arial Black, sans-serif',
+      fontSize: '52px',
+      color: '#ffffff',
+    }).setOrigin(0.5);
+
+    // New record badge
+    if (isNewRecord) {
+      const badge = this.add.text(cx, 340, '✦ NEW RECORD ✦', {
+        fontFamily: 'Courier New, monospace',
+        fontSize: '18px',
+        color: '#ffdd44',
+      }).setOrigin(0.5).setAlpha(0);
+
+      this.tweens.add({
+        targets: badge, alpha: 1, scaleX: 1.1, scaleY: 1.1,
+        yoyo: true, repeat: -1, duration: 600,
+      });
+    } else {
+      this.add.text(cx, 340, `Best: ${this._highScore}m`, {
+        fontFamily: 'Courier New, monospace',
+        fontSize: '18px',
+        color: '#aabbcc',
+      }).setOrigin(0.5);
+    }
+
+    // Retry button
+    const btn = this.add.text(cx, 480, '[ RISE AGAIN ]', {
+      fontFamily: 'Impact, Arial Black, sans-serif',
+      fontSize: '30px',
+      color: '#4fffb0',
+      stroke: '#003322',
+      strokeThickness: 4,
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+
+    btn.on('pointerover',  () => btn.setColor('#ffffff'));
+    btn.on('pointerout',   () => btn.setColor('#4fffb0'));
+    btn.on('pointerdown',  () => {
+      this.cameras.main.fade(300, 0, 0, 0);
+      this.time.delayedCall(310, () => this.scene.start('PlayScene'));
+    });
+
+    // Menu link
+    const menu = this.add.text(cx, 545, 'Main Menu', {
+      fontFamily: 'Courier New, monospace',
+      fontSize: '16px',
+      color: '#556677',
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    menu.on('pointerover', () => menu.setColor('#aabbcc'));
+    menu.on('pointerout',  () => menu.setColor('#556677'));
+    menu.on('pointerdown', () => {
+      this.cameras.main.fade(300, 0, 0, 0);
+      this.time.delayedCall(310, () => this.scene.start('MenuScene'));
+    });
+
+    this.cameras.main.fadeIn(400);
+  }
+}
+
+
+// ═══ src/main.js ═══
+// src/main.js — Game Config & Bootstrap
+
+const GAME_WIDTH  = 390;
+const GAME_HEIGHT = 700;
+
+const config = {
+  type: Phaser.AUTO,
+  width:  GAME_WIDTH,
+  height: GAME_HEIGHT,
+  backgroundColor: '#0a0a1a',
+  parent: document.body,
+
+  physics: {
+    default: 'arcade',
+    arcade: {
+      gravity: { y: 0 },
+      fps: 120,
+      overlapBias: 64,
+      debug: false,         // flip to true to see hitboxes
+    },
+  },
+
+  scene: [
+    BootScene,
+    PreloadScene,
+    MenuScene,
+    PlayScene,
+    GameOverScene,
+  ],
+
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+  },
+};
+
+// Expose globals the scenes need
+window.GAME_WIDTH  = GAME_WIDTH;
+window.GAME_HEIGHT = GAME_HEIGHT;
+
+window.game = new Phaser.Game(config);
+
+</script>
+</body>
+</html>
