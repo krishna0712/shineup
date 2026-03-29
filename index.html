@@ -74,7 +74,7 @@ const CFG = {
   OVERLAP_BIAS: 64,
   // Shield
   SHIELD_LERP_FACTOR: 0.028,   // higher = snappier
-  SHIELD_RADIUS: 19,
+  SHIELD_RADIUS: 18,           // Smaller than balloon radius!
   BALLOON_RADIUS: 23,
   // Gameplay
   SCORE_RATE: 0.005,           // metres per ms per diff unit
@@ -84,7 +84,7 @@ const CFG = {
   LEVEL_DIFF_NERF: 0.88,       // scale level diff so early levels breathable
   SHIELD_REGEN_INTERVAL: 18000,// ms between free HP regen ticks
   COMBO_WINDOW: 2200,          // ms before combo resets
-  NEAR_MISS_DIST: 45,          // px — how close an obstacle can get before "near miss"
+  NEAR_MISS_DIST: 55,          // px — how close an obstacle can get before "near miss"
   // Waves
   BASE_WAVE_GAP: 2400,         // ms at diff=1
   MIN_WAVE_GAP: 650,
@@ -153,6 +153,14 @@ const Store = {
   addCoins(n)     { this._w('coins', this.getCoins() + n); },
   getRuns()       { return this._r('runs', 0); },
   incRuns()       { this._w('runs', this.getRuns() + 1); },
+  
+  // Shop Meta-Progression
+  getBal()         { const b = this._r('bal', 0); return b === null ? 0 : b; },
+  setBal(b)        { this._w('bal', b); },
+  ownsBal(b)       { return b === 0 ? true : this._r('bal_'+b, false); },
+  buyBal(b)        { this._w('bal_'+b, true); },
+  getShLvl()       { const lvl = this._r('sh_lvl', 1); return lvl || 1; },
+  buyShLvl()       { this._w('sh_lvl', this.getShLvl() + 1); },
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -172,9 +180,35 @@ function buildTextures(scene) {
     g.fillStyle(0xcc1133,1); g.fillEllipse(cx,cy+r+1,10,7);
     g.lineStyle(1.5,0xffaacc,.9);
     g.beginPath(); g.moveTo(cx,cy+r+4); g.lineTo(cx-4,cy+r+22); g.strokePath();
-    F(g,'balloon'); }
+    F(g,'balloon_0'); }
+    
+  // Ocean Blue Balloon
+  { const g=G(60,88), cx=30, cy=30, r=27;
+    g.fillStyle(0x2288ff,1); g.fillCircle(cx,cy,r);
+    g.fillStyle(0x55aaff,1); g.fillCircle(cx-7,cy-7,r*.5);
+    g.fillStyle(0xffffff,.22); g.fillCircle(cx-11,cy-11,r*.3);
+    g.fillStyle(0xffffff,.08); for(let i=0;i<3;i++) g.fillRect(cx-r+5+i*6, cy-r+6, 3, r*1.2);
+    g.fillStyle(0x1166cc,1); g.fillEllipse(cx,cy+r+1,10,7);
+    g.lineStyle(1.5,0xaaccff,.9); g.beginPath(); g.moveTo(cx,cy+r+4); g.lineTo(cx-4,cy+r+22); g.strokePath(); F(g,'balloon_1'); }
+    
+  // Neon Green Balloon
+  { const g=G(60,88), cx=30, cy=30, r=27;
+    g.fillStyle(0x22ff44,1); g.fillCircle(cx,cy,r);
+    g.fillStyle(0x55ff77,1); g.fillCircle(cx-7,cy-7,r*.5);
+    g.fillStyle(0xffffff,.22); g.fillCircle(cx-11,cy-11,r*.3);
+    g.fillStyle(0xffffff,.08); for(let i=0;i<3;i++) g.fillRect(cx-r+5+i*6, cy-r+6, 3, r*1.2);
+    g.fillStyle(0x11cc33,1); g.fillEllipse(cx,cy+r+1,10,7);
+    g.lineStyle(1.5,0xaaffcc,.9); g.beginPath(); g.moveTo(cx,cy+r+4); g.lineTo(cx-4,cy+r+22); g.strokePath(); F(g,'balloon_2'); }
 
-  // Shield
+  // Royal Gold Balloon
+  { const g=G(60,88), cx=30, cy=30, r=27;
+    g.fillStyle(0xffaa00,1); g.fillCircle(cx,cy,r);
+    g.fillStyle(0xffff44,1); g.fillCircle(cx-7,cy-7,r*.5);
+    g.fillStyle(0xffffff,.22); g.fillCircle(cx-11,cy-11,r*.3);
+    g.fillStyle(0xffffff,.08); for(let i=0;i<3;i++) g.fillRect(cx-r+5+i*6, cy-r+6, 3, r*1.2);
+    g.fillStyle(0xcc8800,1); g.fillEllipse(cx,cy+r+1,10,7);
+    g.lineStyle(1.5,0xffffaa,.9); g.beginPath(); g.moveTo(cx,cy+r+4); g.lineTo(cx-4,cy+r+22); g.strokePath(); F(g,'balloon_3'); }
+
   // Shield (Smaller Version)
   { const g=G(44,44), cx=22, cy=22, r=20;
     g.fillStyle(0x4fffb0,.1); g.fillCircle(cx,cy,r);
@@ -221,7 +255,6 @@ function buildTextures(scene) {
 
   // Vignette overlay (radial dark edges)
   { const g=G(W,H);
-    // Fake vignette with 4 edge rectangles with alpha gradient approximation
     g.fillStyle(0x000000,.35); g.fillRect(0,0,W,40);       // top edge
     g.fillStyle(0x000000,.2);  g.fillRect(0,0,30,H);       // left edge
     g.fillStyle(0x000000,.2);  g.fillRect(W-30,0,30,H);    // right edge
@@ -236,14 +269,12 @@ class BootScene extends Phaser.Scene {
   constructor() { super({ key:'Boot' }); }
 
   preload() {
-    // Loading bar
     const track = this.add.graphics();
     track.fillStyle(0x111122,1); track.fillRoundedRect(W/2-110,H/2-4,220,8,4);
     const bar = this.add.rectangle(W/2-110,H/2, 0, 8, 0x4fffb0).setOrigin(0,0.5);
     this.load.on('progress', v => { bar.width = 220*v; });
     this.add.text(W/2,H/2+22,'LOADING',{ fontFamily:"'Bebas Neue',sans-serif", fontSize:'14px', color:'#4fffb0', letterSpacing:6 }).setOrigin(0.5);
 
-    // Audio — silent fail if files don't exist
     this.load.audio('bgm_endless', ['music.mp3','music.ogg']);
     this.load.audio('bgm_levels',  ['music1.mp3','music1.ogg']);
   }
@@ -252,7 +283,7 @@ class BootScene extends Phaser.Scene {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  AUDIO MANAGER  — singleton wrapper to avoid duplicate tracks
+//  AUDIO MANAGER
 // ═══════════════════════════════════════════════════════════
 const AudioMgr = {
   _current: null,
@@ -291,38 +322,30 @@ class MenuScene extends Phaser.Scene {
   }
 
   _buildBg() {
-    // Layered sky gradient
     const g = this.add.graphics();
     g.fillStyle(0x4a9bdf,1); g.fillRect(0,0,W,H/2);
     g.fillStyle(0x2266bb,1); g.fillRect(0,H/2,W,H/2);
-    // Horizon glow
     g.fillStyle(0x88ccff,0.15); g.fillEllipse(W/2,H*0.48,W*1.4,160);
 
-    // Stars (sparse at top for daytime feel)
     for(let i=0;i<60;i++){
       const s=this.add.image(Phaser.Math.Between(0,W), Phaser.Math.Between(0,H/2),'star')
         .setAlpha(Math.random()*.5+.1).setScale(Math.random()*2+.5);
       this.tweens.add({ targets:s, alpha:0.05, yoyo:true, repeat:-1, duration:Phaser.Math.Between(1200,4000), delay:Phaser.Math.Between(0,3000) });
     }
 
-    // Clouds scrolling
     for(let i=0;i<7;i++){
       const c=this.add.image(Phaser.Math.Between(-40,W+40), Phaser.Math.Between(80,H-120),'cloud')
         .setAlpha(.08+Math.random()*.07).setScale(Phaser.Math.FloatBetween(2,5));
       this.tweens.add({ targets:c, x: c.x + Phaser.Math.Between(-50,50), yoyo:true, repeat:-1, duration:Phaser.Math.Between(8000,16000), ease:'Sine.easeInOut' });
     }
-
-    // Vignette on top
     this.add.image(W/2,H/2,'vignette').setDepth(5);
   }
 
   _buildTitle() {
     const cx = W/2;
-    // Glow layer
     this.add.text(cx,178,'RISE UP',{ fontFamily:"'Bebas Neue',sans-serif", fontSize:'82px', color:'#ffffff', stroke:'#4fffb0', strokeThickness:18 }).setOrigin(.5).setAlpha(.12).setDepth(6);
     const title = this.add.text(cx,178,'RISE UP',{ fontFamily:"'Bebas Neue',sans-serif", fontSize:'82px', color:'#ffffff', stroke:'#06060f', strokeThickness:6, shadow:{offsetX:0,offsetY:8,color:'rgba(0,0,0,0.35)',blur:12,fill:true} }).setOrigin(.5).setDepth(7);
     this.tweens.add({ targets:title, y:185, yoyo:true, repeat:-1, duration:2400, ease:'Sine.easeInOut' });
-
     this.add.text(cx,248,'SHIELD THE BALLOON · REACH FOR THE STARS',{ fontFamily:"'Nunito',sans-serif", fontWeight:'600', fontSize:'11px', color:'#d0eeff', letterSpacing:2 }).setOrigin(.5).setDepth(7);
   }
 
@@ -355,8 +378,12 @@ class MenuScene extends Phaser.Scene {
       this.cameras.main.fade(280,0,0,0);
       this.time.delayedCall(300, ()=>this.scene.start('Play',{mode:'endless',level:1}));
     });
+    this._btn(cx, 616, '🛒  ITEM SHOP', 'Upgrades  ·  Skins  ·  Customization', 0xff5577, ()=>{
+      this.cameras.main.fade(280,0,0,0);
+      this.time.delayedCall(300, ()=>this.scene.start('Shop'));
+    });
 
-    this.add.text(cx, H-18, 'Move mouse or touch to control the shield', { fontFamily:"'Nunito',sans-serif", fontWeight:'600', fontSize:'11px', color:'rgba(255,255,255,0.3)' }).setOrigin(.5).setDepth(7);
+    this.add.text(cx, H-18, 'Drag anywhere to control the shield', { fontFamily:"'Nunito',sans-serif", fontWeight:'600', fontSize:'11px', color:'rgba(255,255,255,0.3)' }).setOrigin(.5).setDepth(7);
   }
 
   _btn(x, y, title, sub, col, cb) {
@@ -372,6 +399,85 @@ class MenuScene extends Phaser.Scene {
     zone.on('pointerover', ()=>{ g.clear(); g.fillStyle(0xffffff,.22); g.fillRoundedRect(x-155,y-36,310,72,14); g.lineStyle(2,col,.9); g.strokeRoundedRect(x-155,y-36,310,72,14); t.setScale(1.04); });
     zone.on('pointerout',  ()=>{ g.clear(); g.fillStyle(0xffffff,.12); g.fillRoundedRect(x-155,y-36,310,72,14); g.lineStyle(1.5,col,.55); g.strokeRoundedRect(x-155,y-36,310,72,14); t.setScale(1); });
     zone.on('pointerdown', cb);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  SHOP SCENE
+// ═══════════════════════════════════════════════════════════
+class ShopScene extends Phaser.Scene {
+  constructor() { super({ key: 'Shop' }); }
+
+  create() {
+    const bg = this.add.graphics();
+    bg.fillStyle(0x1a2540, 1); bg.fillRect(0, 0, W, H);
+    for (let i = 0; i < 60; i++) { this.add.image(Phaser.Math.Between(0, W), Phaser.Math.Between(0, H), 'star').setAlpha(Math.random() * 0.4 + 0.1); }
+
+    this.add.text(W/2, 50, 'ITEM SHOP', { fontFamily: "'Bebas Neue',sans-serif", fontSize: '38px', color: '#fff', letterSpacing: 2, shadow: { offsetX: 0, offsetY: 3, color: 'rgba(0,0,0,0.3)', blur: 5, fill: true } }).setOrigin(0.5);
+    this.coinTxt = this.add.text(W/2, 90, '🪙 ' + Store.getCoins(), { fontFamily: "'Nunito',sans-serif", fontWeight: '800', fontSize: '24px', color: '#ffdd44' }).setOrigin(0.5);
+
+    const items = [
+      { type: 'bal', id: 1, name: 'Ocean Blue Skin', price: 100, tex: 'balloon_1' },
+      { type: 'bal', id: 2, name: 'Neon Green Skin', price: 250, tex: 'balloon_2' },
+      { type: 'bal', id: 3, name: 'Royal Gold Skin', price: 500, tex: 'balloon_3' },
+      { type: 'upg', id: 'sh', name: 'Shield Size Up', price: [0, 200, 400, 800], tex: 'shield' }
+    ];
+
+    items.forEach((it, i) => {
+      const y = 160 + i * 110;
+      
+      const g = this.add.graphics();
+      g.fillStyle(0xffffff, 0.1); g.fillRoundedRect(20, y - 45, W - 40, 90, 12);
+      
+      this.add.image(60, y, it.tex).setScale(0.85);
+      this.add.text(105, y - 12, it.name, { fontFamily: "'Nunito',sans-serif", fontWeight: '800', fontSize: '18px', color: '#fff' });
+
+      const btnG = this.add.graphics();
+      const drawBtn = (color, txt, textColor) => {
+        btnG.clear();
+        btnG.fillStyle(color, 1); btnG.fillRoundedRect(W - 120, y - 20, 90, 40, 8);
+        if (this['txt_'+i]) this['txt_'+i].destroy();
+        this['txt_'+i] = this.add.text(W - 75, y, txt, { fontFamily: "'Nunito',sans-serif", fontWeight: '800', fontSize: '15px', color: textColor || '#000' }).setOrigin(0.5);
+      };
+
+      let state = ''; let price = 0;
+      const refresh = () => {
+         if (it.type === 'bal') {
+            if (Store.ownsBal(it.id)) {
+               if (Store.getBal() === it.id) { state = 'equipped'; drawBtn(0x4fffb0, 'Equipped', '#000'); }
+               else { state = 'equip'; drawBtn(0x556677, 'Equip', '#fff'); }
+            } else { state = 'buy'; price = it.price; drawBtn(0xffdd44, '🪙 ' + price); }
+         } else if (it.type === 'upg') {
+            const lvl = Store.getShLvl();
+            if (lvl >= 4) { state = 'max'; drawBtn(0x4fffb0, 'MAX LVL', '#000'); }
+            else { state = 'buy'; price = it.price[lvl]; drawBtn(0xffdd44, '🪙 ' + price); }
+         }
+      };
+      refresh();
+
+      const zone = this.add.zone(W - 75, y, 90, 40).setInteractive({ useHandCursor: true });
+      zone.on('pointerdown', () => {
+         if (state === 'buy') {
+            if (Store.getCoins() >= price) {
+               Store.addCoins(-price);
+               if (it.type === 'bal') { Store.buyBal(it.id); Store.setBal(it.id); }
+               else if (it.type === 'upg') { Store.buyShLvl(); }
+               this.coinTxt.setText('🪙 ' + Store.getCoins());
+               this.events.emit('refreshAll');
+            } else {
+               this.cameras.main.shake(200, 0.015);
+            }
+         } else if (state === 'equip') {
+            Store.setBal(it.id);
+            this.events.emit('refreshAll');
+         }
+      });
+
+      this.events.on('refreshAll', refresh);
+    });
+
+    const back = this.add.text(W/2, H - 40, '← Back to Menu', { fontFamily: "'Nunito',sans-serif", fontWeight: '800', fontSize: '16px', color: '#fff' }).setOrigin(0.5).setAlpha(0.8).setInteractive({ useHandCursor: true });
+    back.on('pointerdown', () => { this.cameras.main.fade(200, 0, 0, 0); this.time.delayedCall(220, () => this.scene.start('Menu')); });
   }
 }
 
@@ -430,7 +536,6 @@ class LevelSelectScene extends Phaser.Scene {
         const x = sX+col*(bw+gX)+bw/2;
         const y = sY+row*(bh+gY)+bh/2;
 
-        // Card with themed gradient (approximate with two rects)
         const card = this.add.graphics();
         const alpha = unlocked?.88:.28;
         card.fillStyle(th.sky1,alpha); card.fillRoundedRect(x-bw/2,y-bh/2,bw,bh,10);
@@ -439,7 +544,6 @@ class LevelSelectScene extends Phaser.Scene {
         card.strokeRoundedRect(x-bw/2,y-bh/2,bw,bh,10);
         this._grid.add(card);
 
-        // Level number
         const num = this.add.text(x, y-(stars>0?10:4), ''+lvl, {
           fontFamily:"'Bebas Neue',sans-serif", fontSize:'24px',
           color: unlocked?'#ffffff':'rgba(255,255,255,0.3)',
@@ -447,7 +551,6 @@ class LevelSelectScene extends Phaser.Scene {
         }).setOrigin(.5);
         this._grid.add(num);
 
-        // Stars
         if(stars>0){
           const sc=this.add.text(x,y+14,'★'.repeat(stars)+'☆'.repeat(3-stars),{ fontFamily:'sans-serif', fontSize:'12px', color:'#ffdd44' }).setOrigin(.5);
           this._grid.add(sc);
@@ -482,19 +585,16 @@ class LevelSelectScene extends Phaser.Scene {
         }
       }
     }
-
     const th=THEMES[this._page];
     this._header.themeLbl.setText('Theme: '+th.name+'  (Levels '+(this._page*10+1)+'–'+(this._page*10+10)+')');
   }
 
   _buildNav() {
     this._nav.removeAll(true);
-
     const back=this.add.text(26,H-30,'← Back',{ fontFamily:"'Nunito',sans-serif", fontWeight:'700', fontSize:'15px', color:'#4fffb0' }).setInteractive({useHandCursor:true});
     back.on('pointerdown',()=>{ this.cameras.main.fade(250,0,0,0); this.time.delayedCall(270,()=>this.scene.start('Menu')); });
     this._nav.add(back);
 
-    // Page dots
     for(let i=0;i<10;i++){
       const dot=this.add.circle(W/2-45+i*10,H-26,4,0xffffff,i===this._page?1:.25).setInteractive({useHandCursor:true});
       dot.on('pointerdown',()=>{ this._page=i; this._buildGrid(); this._buildNav(); });
@@ -541,14 +641,17 @@ class PlayScene extends Phaser.Scene {
     this._diff      = this._cfg.diff;
     this._shVX      = 0;
     this._shVY      = 0;
-    this._ptrX      = W/2;
-    this._ptrY      = H-220;
+    
+    // Virtual Joystick Variables
+    this._targetX   = W/2;
+    this._targetY   = H-220;
+    this._isDragging= false;
+    
     this._nearMisses= 0;
-    this._shieldHits= 0;    // total obstacles deflected
+    this._shieldHits= 0; 
     this._isFirstRun= Store.getRuns() < 3;
     Store.incRuns();
 
-    // Music
     AudioMgr.play(this, this._mode==='level' ? 'bgm_levels' : 'bgm_endless');
 
     this._buildBg();
@@ -561,7 +664,6 @@ class PlayScene extends Phaser.Scene {
     this._setupInput();
     this._wave = new WaveController(this);
 
-    // Shield HP regen — 1 pip every interval if < 3
     this._regenTimer = this.time.addEvent({ delay: CFG.SHIELD_REGEN_INTERVAL, loop:true, callback:()=>{
       if(this._alive && this._shieldHP < 3 && !this._shieldInv){
         this._shieldHP = Math.min(3, this._shieldHP+1);
@@ -570,7 +672,6 @@ class PlayScene extends Phaser.Scene {
       }
     }});
 
-    // Pause with ESC
     this.input.keyboard?.on('keydown-ESC', ()=>{ if(this._alive && !this._lvlDone) this._pause(); });
 
     if(this._isFirstRun) this._tutorial();
@@ -584,7 +685,6 @@ class PlayScene extends Phaser.Scene {
     this._score += dt * CFG.SCORE_RATE * this._diff;
     const alt = Math.floor(this._score);
 
-    // Difficulty ramp (endless only; level mode has fixed diff from config)
     if(this._mode==='endless'){
       this._diff = CFG.ENDLESS_DIFF_BASE + Math.floor(this._score/CFG.ENDLESS_RAMP_INTERVAL) * CFG.ENDLESS_RAMP_AMOUNT;
     }
@@ -597,7 +697,6 @@ class PlayScene extends Phaser.Scene {
                      this._mode, this._lvlNum,
                      this._mode==='level' ? this._cfg.targetAlt : 0);
 
-    // Level complete check
     if(this._mode==='level' && alt >= this._cfg.targetAlt && !this._lvlDone){
       this._lvlDone = true;
       this._wave.stop();
@@ -605,7 +704,6 @@ class PlayScene extends Phaser.Scene {
     }
   }
 
-  // ── BACKGROUND ──────────────────────────────────────────────────────────────
   _buildBg() {
     const th = this._cfg.theme;
     const bg = this.add.graphics();
@@ -614,7 +712,6 @@ class PlayScene extends Phaser.Scene {
 
     this._obstacles = this.physics.add.group({ allowGravity:false });
 
-    // Stars
     this._stars=[];
     for(let i=0;i<160;i++){
       const s=this.add.image(Phaser.Math.Between(0,W), Phaser.Math.Between(-H,H),'star')
@@ -622,7 +719,6 @@ class PlayScene extends Phaser.Scene {
       this._stars.push({ s, sp: Phaser.Math.FloatBetween(.02,.12) });
     }
 
-    // Clouds
     this._clouds=[];
     if(th.clouds>0){
       for(let i=0;i<14;i++){
@@ -635,7 +731,6 @@ class PlayScene extends Phaser.Scene {
       }
     }
 
-    // Vignette always on top
     this.add.image(W/2,H/2,'vignette').setDepth(25).setAlpha(.7);
   }
 
@@ -645,26 +740,26 @@ class PlayScene extends Phaser.Scene {
     this._clouds.forEach(d=>{ d.s.y+=spd*d.sp; if(d.s.y>H+80){ d.s.y=-100; d.s.x=Phaser.Math.Between(-20,W+20); } });
   }
 
-  // ── ENTITIES ─────────────────────────────────────────────────────────────────
   _buildEntities() {
     const bx=W/2, by=H-150;
 
-    this._balloon = this.physics.add.sprite(bx,by,'balloon');
+    const balId = Store.getBal() || 0;
+    this._balloon = this.physics.add.sprite(bx,by,'balloon_' + balId);
     this._balloon.setCircle(CFG.BALLOON_RADIUS, 6, 4);
     this._balloon.body.setAllowGravity(false);
     this._balloon.body.immovable = true;
     this._balloon.setDepth(12);
     this.tweens.add({ targets:this._balloon, y:by+8, yoyo:true, repeat:-1, duration:1300, ease:'Sine.easeInOut' });
 
+    const shLvl = Store.getShLvl() || 1;
     this._shield = this.physics.add.image(bx,by-75,'shield');
-    // Corrected hitbox: radius 34 with proper offset for 80x80 texture
     this._shield.setCircle(CFG.SHIELD_RADIUS, 22-CFG.SHIELD_RADIUS, 22-CFG.SHIELD_RADIUS);
+    this._shield.setScale(1 + (shLvl - 1) * 0.15);
     this._shield.body.setAllowGravity(false);
     this._shield.setDepth(22);
     this._updateShieldTint();
     this.tweens.add({ targets:this._shield, alpha:.72, yoyo:true, repeat:-1, duration:1100, ease:'Sine.easeInOut' });
 
-    // Shield trail emitter
     this._shieldTrail = this.add.particles(0,0,'shield_trail',{
       lifespan:180, scale:{start:.5,end:0}, alpha:{start:.4,end:0},
       frequency:30, quantity:1, blendMode:Phaser.BlendModes.ADD,
@@ -675,8 +770,9 @@ class PlayScene extends Phaser.Scene {
   _moveShield(dt) {
     const t = Math.min(1, dt * CFG.SHIELD_LERP_FACTOR);
     const px=this._shield.x, py=this._shield.y;
-    const nx=Phaser.Math.Clamp(Phaser.Math.Linear(px,this._ptrX,t),42,W-42);
-    const ny=Phaser.Math.Clamp(Phaser.Math.Linear(py,this._ptrY,t),42,H-42);
+    // Uses virtual joystick target instead of raw pointer coordinates
+    const nx=Phaser.Math.Clamp(Phaser.Math.Linear(px,this._targetX,t),42,W-42);
+    const ny=Phaser.Math.Clamp(Phaser.Math.Linear(py,this._targetY,t),42,H-42);
     this._shield.x=nx; this._shield.y=ny;
     this._shield.body.reset(nx,ny);
     this._shVX=(nx-px)/(dt/1000);
@@ -706,7 +802,6 @@ class PlayScene extends Phaser.Scene {
     }
   }
 
-  // ── NEAR MISS detection ─────────────────────────────────────────────────────
   _checkNearMisses() {
     this._obstacles.children.each(obs=>{
       if(!obs.active) return;
@@ -721,7 +816,6 @@ class PlayScene extends Phaser.Scene {
     });
   }
 
-  // ── COLLISIONS ───────────────────────────────────────────────────────────────
   _buildCollisions() {
     this.physics.add.overlap(this._shield,   this._obstacles, this._hitShield,  null, this);
     this.physics.add.overlap(this._balloon,  this._obstacles, this._hitBalloon, null, this);
@@ -733,7 +827,6 @@ class PlayScene extends Phaser.Scene {
 
   _hitShield(sh, obs) {
     if(!obs.active || obs.getData('justHit')) return;
-    // Mark for 120ms so overlap doesn't fire every frame
     obs.setData('justHit', true);
     this.time.delayedCall(120, ()=>{ if(obs?.active) obs.setData('justHit',false); });
 
@@ -753,7 +846,6 @@ class PlayScene extends Phaser.Scene {
     this._shieldHits++;
     this._addCombo();
 
-    // Coin bonus on every 10 deflections
     if(this._shieldHits % 10 === 0){
       this._hud.showMsg('10 DEFLECTS! +20m', 0x4fffb0);
       this._score += 20;
@@ -779,12 +871,11 @@ class PlayScene extends Phaser.Scene {
   _hitCoin(obj, c) {
     if(!c.active) return;
     c.destroy(); this._coins++;
-    this._score+=3; // coins give small score boost
+    this._score+=3;
     this._addCombo();
     this._glitter(c.x,c.y,0xffcc00);
   }
 
-  // ── COMBO ─────────────────────────────────────────────────────────────────────
   _addCombo() {
     this._combo++;
     if(this._combo>this._maxCombo) this._maxCombo=this._combo;
@@ -798,7 +889,6 @@ class PlayScene extends Phaser.Scene {
     }
   }
 
-  // ── SPAWN (called by WaveController) ─────────────────────────────────────────
   spawnPickup(x,y){
     const types=['shield','slow','ghost'];
     const type=Phaser.Math.RND.pick(types);
@@ -818,7 +908,6 @@ class PlayScene extends Phaser.Scene {
     this.time.delayedCall(7000,()=>{ if(c?.active) c.destroy(); });
   }
 
-  // ── PARTICLES ─────────────────────────────────────────────────────────────────
   _buildParticles() {
     this._streaks=this.add.particles(0,0,'streak',{
       x:{min:0,max:W}, y:-4, speedY:{min:240,max:460}, speedX:{min:-10,max:10},
@@ -858,13 +947,33 @@ class PlayScene extends Phaser.Scene {
     this.time.delayedCall(1100,()=>b.destroy());
   }
 
-  // ── INPUT ──────────────────────────────────────────────────────────────────────
+  // ── INPUT (Upgraded Virtual Joystick) ──────────────────────────────────────────
   _setupInput(){
-    this.input.on('pointermove',p=>{ this._ptrX=p.x; this._ptrY=p.y; });
-    this.input.on('pointerdown',p=>{ this._ptrX=p.x; this._ptrY=p.y; });
+    this.input.on('pointerdown', p => {
+      this._isDragging = true;
+      this._dragStartX = p.x;
+      this._dragStartY = p.y;
+      this._shieldStartX = this._targetX;
+      this._shieldStartY = this._targetY;
+    });
+
+    this.input.on('pointermove', p => {
+      if (this._isDragging) {
+        // Multiplier so you don't have to drag all the way across the screen
+        const sensitivity = 1.3;
+        const dx = (p.x - this._dragStartX) * sensitivity;
+        const dy = (p.y - this._dragStartY) * sensitivity;
+        
+        // Calculate new target based on the initial shield pos + drag difference
+        this._targetX = Phaser.Math.Clamp(this._shieldStartX + dx, 42, W - 42);
+        this._targetY = Phaser.Math.Clamp(this._shieldStartY + dy, 42, H - 42);
+      }
+    });
+
+    this.input.on('pointerup', () => { this._isDragging = false; });
+    this.input.on('pointerout', () => { this._isDragging = false; });
   }
 
-  // ── PAUSE ──────────────────────────────────────────────────────────────────────
   _pause(){
     if(this.scene.isPaused('Play')) return;
     this.scene.pause();
@@ -877,13 +986,12 @@ class PlayScene extends Phaser.Scene {
     this.input.keyboard?.once('keydown-ESC',resume);
   }
 
-  // ── TUTORIAL ───────────────────────────────────────────────────────────────────
   _tutorial(){
     const ov=this.add.graphics().setDepth(100);
     ov.fillStyle(0x000000,.82); ov.fillRect(0,0,W,H);
     const lines=[
-      { t:'MOVE MOUSE / TOUCH', c:'#ffffff', s:'20px', w:'900' },
-      { t:'to control the shield', c:'rgba(255,255,255,0.65)', s:'13px', w:'500' },
+      { t:'DRAG ANYWHERE TO MOVE', c:'#ffffff', s:'20px', w:'900' },
+      { t:'shield follows your finger motion', c:'rgba(255,255,255,0.65)', s:'13px', w:'500' },
       { t:'', c:'', s:'8px' },
       { t:'BLOCK ALL OBSTACLES', c:'#ff5566', s:'17px', w:'800' },
       { t:'protect the balloon beneath', c:'rgba(255,255,255,0.65)', s:'13px', w:'500' },
@@ -903,7 +1011,6 @@ class PlayScene extends Phaser.Scene {
     this.input.once('pointerdown',()=>txts.forEach(t=>t.destroy()));
   }
 
-  // ── LEVEL COMPLETE ─────────────────────────────────────────────────────────────
   _finishLevel(){
     AudioMgr.fadeOut(this,600);
     const noShieldDmg=this._shieldHP===3;
@@ -920,7 +1027,6 @@ class PlayScene extends Phaser.Scene {
     }));
   }
 
-  // ── DEATH ─────────────────────────────────────────────────────────────────────
   _die(){
     this._regenTimer?.remove();
     AudioMgr.fadeOut(this,500);
@@ -955,18 +1061,15 @@ class PlayHUD {
     const B=(sz,col)=>({ fontFamily:"'Bebas Neue',sans-serif", fontSize:sz, color:col||'#ffffff', letterSpacing:1 });
     const N=(sz,col)=>({ fontFamily:"'Nunito',sans-serif", fontWeight:'700', fontSize:sz, color:col||'rgba(255,255,255,0.85)' });
 
-    // Mode badge (top-left)
     const modeStr=scene._mode==='level'?'LVL '+scene._lvlNum:'∞ ENDLESS';
     const modeCol=scene._mode==='level'?'#4fffb0':'#ffdd44';
     const mg=scene.add.graphics().setScrollFactor(0).setDepth(D);
     mg.fillStyle(0x000000,.45); mg.fillRoundedRect(8,8,94,28,7);
     scene.add.text(55,22,modeStr,N('12px',modeCol)).setOrigin(.5).setScrollFactor(0).setDepth(D+1);
 
-    // Altitude (top-centre)
     scene.add.text(W/2,8,'ALT',N('9px','rgba(255,255,255,0.5)')).setOrigin(.5,0).setScrollFactor(0).setDepth(D);
     this._altTxt=scene.add.text(W/2,17,'0m',B('32px')).setOrigin(.5,0).setScrollFactor(0).setDepth(D+1);
 
-    // Level mode: target + progress bar
     if(scene._mode==='level'){
       const tgt=scene._cfg.targetAlt;
       scene.add.text(W/2,52,'TARGET: '+tgt+'m',N('10px','rgba(255,255,255,0.6)')).setOrigin(.5,0).setScrollFactor(0).setDepth(D);
@@ -976,33 +1079,25 @@ class PlayHUD {
       this._progW=0; this._targetAlt=tgt; this._lastPct=0;
     }
 
-    // Endless: high score
     if(scene._mode==='endless'){
       this._hsTxt=scene.add.text(W-10,8,'BEST '+Store.getHS()+'m',N('11px','rgba(255,255,255,0.55)')).setOrigin(1,0).setScrollFactor(0).setDepth(D);
     }
 
-    // Coins (top-right area)
     scene.add.image(W-26,36,'coin').setScrollFactor(0).setDepth(D).setScale(.88);
     this._coinTxt=scene.add.text(W-40,27,'0',N('18px','#ffdd44')).setOrigin(1,0).setScrollFactor(0).setDepth(D+1);
 
-    // Shield pips (bottom-left)
     scene.add.text(12,H-38,'SHIELD',N('9px','rgba(255,255,255,0.5)')).setScrollFactor(0).setDepth(D);
     this._pipG=scene.add.graphics().setScrollFactor(0).setDepth(D+1);
     this._drawPips(3);
 
-    // Right edge altitude bar
     const rb=scene.add.graphics().setScrollFactor(0).setDepth(D);
     rb.fillStyle(0x000000,.35); rb.fillRect(W-7,0,7,H);
     this._barG=scene.add.graphics().setScrollFactor(0).setDepth(D+1);
     this._barH=0; this._barCol=0x4fffb0;
 
-    // Combo
     this._comboTxt=scene.add.text(W/2,H-72,'',B('24px','#ffdd44')).setOrigin(.5).setAlpha(0).setScrollFactor(0).setDepth(D+1);
-
-    // Floating message
     this._msgTxt=scene.add.text(W/2,H/2-40,'',B('18px','#4fffb0')).setOrigin(.5).setAlpha(0).setScrollFactor(0).setDepth(D+2);
 
-    // "ALMOST THERE!" warning at 80%+ progress (level mode)
     if(scene._mode==='level'){
       this._almostTxt=scene.add.text(W/2,H/2+60,'',B('22px','#ff9944')).setOrigin(.5).setAlpha(0).setScrollFactor(0).setDepth(D+2);
     }
@@ -1023,7 +1118,6 @@ class PlayHUD {
     this._coinTxt.setText(''+coins);
     this._drawPips(shieldHP);
 
-    // Right bar cycles per 600m, colour shifts at milestones
     const pct=Math.min(1,(alt%600)/600);
     const bh=H*pct;
     const newCol = diff>2?0xff3355 : diff>1.5?0xff9944 : 0x4fffb0;
@@ -1034,7 +1128,6 @@ class PlayHUD {
       this._barG.fillRect(W-7,H-bh,7,bh);
     }
 
-    // Level progress bar
     if(mode==='level'&&this._progG){
       const pw=Math.min(220,(alt/targetAlt)*220);
       if(pw!==this._progW){
@@ -1045,7 +1138,6 @@ class PlayHUD {
         this._progG.fillStyle(col,1);
         this._progG.fillRoundedRect(W/2-110,66,pw,5,3);
 
-        // "Almost there!" pulse at 80%
         if(pct2>=.8&&this._lastPct<.8){
           this._scene_tweenAlmost();
         }
@@ -1116,18 +1208,15 @@ class WaveController {
     if(this._idx>0&&this._idx%pats.length===0) this._lps++;
     this._spawn(name);
 
-    // Gap narrows with difficulty, respects minimum
     const gap=Math.max(CFG.MIN_WAVE_GAP, CFG.BASE_WAVE_GAP-(diff-1)*650);
     this._cd=gap*(0.85+Math.random()*.3);
 
-    // Powerups
     this._sincepu++;
     if(this._sincepu>=Phaser.Math.Between(...CFG.POWERUP_EVERY)){
       this._sincepu=0;
       this._sc.time.delayedCall(500,()=>{ if(this._sc._alive&&!this._stopped) this._sc.spawnPickup(Phaser.Math.Between(50,W-50),-22); });
     }
 
-    // Coins
     this._sincecoin++;
     if(this._sincecoin>=Phaser.Math.Between(...CFG.COIN_EVERY)){
       this._sincecoin=0;
@@ -1159,7 +1248,6 @@ class WaveController {
   }
 
   _autoDie(obs){
-    // Use a single repeating timer — stop early as soon as it's gone
     const t=this._sc.time.addEvent({ delay:150, repeat:60, callback:()=>{
       if(!obs?.active){ t.remove(); return; }
       if(obs.y>H+110||obs.x<-120||obs.x>W+120){ obs.destroy(); t.remove(); }
@@ -1171,7 +1259,6 @@ class WaveController {
   // ── PATTERNS ──────────────────────────────────────────────────────────────────
   _fallingBlocks(){
     const n=this._dens(), v=this._vel();
-    // Shape variety grows with difficulty
     const lvl=this._cfg.lvl;
     const pool=['block'];
     if(lvl>=5)  pool.push('circle');
@@ -1269,7 +1356,7 @@ class WaveController {
     for(let i=0;i<n;i++){
       const angle=Phaser.Math.DegToRad(i*(360/n));
       const x=cx+Math.cos(angle)*r, y=-40-i*20;
-      const type=typePool[i%typePool.length]; // cycle types instead of all-same
+      const type=typePool[i%typePool.length];
       this._sc.time.delayedCall(i*85,()=>{
         if(!this._sc._alive||this._stopped) return;
         const t=this._mkObs(x,y,type,1.5); t.setVelocityY(this._vel()*.8); t.setVelocityX(Math.cos(angle+Math.PI/2)*115); this._spin(t,580);
@@ -1296,17 +1383,14 @@ class LevelCompleteScene extends Phaser.Scene {
     const d=this._d, cx=W/2;
     const cfg=getLevelConfig(d.level), th=cfg.theme;
 
-    // Themed background
     const bg=this.add.graphics();
     bg.fillStyle(th.sky1,1); bg.fillRect(0,0,W,H/2);
     bg.fillStyle(th.sky2||th.sky1,1); bg.fillRect(0,H/2,W,H/2);
     for(let i=0;i<80;i++) this.add.image(Phaser.Math.Between(0,W),Phaser.Math.Between(0,H),'star').setAlpha(Math.random()*th.stars*.8+.08);
     this.add.image(cx,H/2,'vignette').setAlpha(.6);
 
-    // Confetti burst
     this._confetti();
 
-    // Title drop-in
     const banner=this.add.text(cx,-70,'LEVEL COMPLETE',{
       fontFamily:"'Bebas Neue',sans-serif", fontSize:'40px', color:'#ffffff',
       stroke:'rgba(0,0,0,0.3)', strokeThickness:4,
@@ -1320,7 +1404,6 @@ class LevelCompleteScene extends Phaser.Scene {
       }).setOrigin(.5);
     });
 
-    // Stars animate in
     this.time.delayedCall(380,()=>{
       for(let i=0;i<3;i++){
         const earned=i<d.stars;
@@ -1335,7 +1418,6 @@ class LevelCompleteScene extends Phaser.Scene {
       }
     });
 
-    // Stats rows
     this.time.delayedCall(650,()=>{
       const rows=[
         ['🚀  Altitude', d.alt+'m'],
@@ -1353,7 +1435,6 @@ class LevelCompleteScene extends Phaser.Scene {
       });
     });
 
-    // Next level preview
     if(d.hasNext&&d.level<CFG.MAX_LEVEL){
       this.time.delayedCall(880,()=>{
         const nCfg=getLevelConfig(d.level+1), nTh=nCfg.theme;
@@ -1422,7 +1503,6 @@ class GameOverScene extends Phaser.Scene {
     for(let i=0;i<100;i++) this.add.image(Phaser.Math.Between(0,W),Phaser.Math.Between(0,H),'star').setAlpha(Math.random()*.5+.08);
     this.add.image(cx,H/2,'vignette').setAlpha(.8);
 
-    // Title
     const title=this.add.text(cx,-80,'GAME OVER',{
       fontFamily:"'Bebas Neue',sans-serif", fontSize:'52px', color:'#ff5566', letterSpacing:4,
       shadow:{offsetX:0,offsetY:5,color:'rgba(0,0,0,0.5)',blur:10,fill:true}
@@ -1433,7 +1513,6 @@ class GameOverScene extends Phaser.Scene {
       fontFamily:"'Nunito',sans-serif", fontWeight:'600', fontSize:'13px', color:'rgba(255,255,255,0.55)', letterSpacing:3
     }).setOrigin(.5);
 
-    // Score
     this.time.delayedCall(200,()=>{
       const sc=this.add.text(cx,236,(d.score||0)+'m',{
         fontFamily:"'Bebas Neue',sans-serif", fontSize:'60px', color:'#ffffff',
@@ -1521,7 +1600,7 @@ new Phaser.Game({
   parent: document.body,
   physics: { default:'arcade', arcade:{ gravity:{y:0}, fps:CFG.PHYSICS_FPS, overlapBias:CFG.OVERLAP_BIAS, debug:false } },
   scale: { mode:Phaser.Scale.FIT, autoCenter:Phaser.Scale.CENTER_BOTH },
-  scene: [BootScene, MenuScene, LevelSelectScene, PlayScene, LevelCompleteScene, GameOverScene],
+  scene: [BootScene, MenuScene, LevelSelectScene, PlayScene, LevelCompleteScene, GameOverScene, ShopScene],
 });
 </script>
 </body>
